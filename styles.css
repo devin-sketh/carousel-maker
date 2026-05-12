@@ -1620,6 +1620,20 @@ body {
     max-height: 220px;
     overflow-y: auto;
 }
+.api-key-empty {
+    padding: 14px 14px;
+    border: 1px dashed var(--border, #d1d5db);
+    border-radius: 10px;
+    background: #fafbff;
+    font-size: 13px;
+    line-height: 1.5;
+    color: #4b5563;
+}
+.api-key-empty a {
+    color: var(--primary, #6366f1);
+    text-decoration: none;
+}
+.api-key-empty a:hover { text-decoration: underline; }
 .api-key-item {
     display: flex;
     align-items: center;

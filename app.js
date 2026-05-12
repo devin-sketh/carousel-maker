@@ -57,11 +57,15 @@ function getGeminiKey() {
     const v = loadKeyVault();
     if (v.activeId) {
         const builtin = findBuiltinKey(v.activeId);
-        if (builtin) return builtin.value;
+        if (builtin && builtin.value) return builtin.value;
         const k = v.keys.find(x => x.id === v.activeId);
-        if (k) return k.value;
+        if (k && k.value) return k.value;
     }
-    return GEMINI_API_KEY_DEFAULT;
+    // Fallback: any user-added key, then any non-empty built-in.
+    if (v.keys.length && v.keys[0].value) return v.keys[0].value;
+    const fallbackBuiltin = GEMINI_BUILTIN_KEYS.find(k => k.value);
+    if (fallbackBuiltin) return fallbackBuiltin.value;
+    return '';
 }
 function addKeyToVault(name, value) {
     const v = loadKeyVault();
@@ -147,11 +151,18 @@ function markQuotaExhausted() {
 }
 function activeKeyDisplayName() {
     const v = loadKeyVault();
-    if (!v.activeId) return GEMINI_BUILTIN_KEYS[0].name;
-    const builtin = findBuiltinKey(v.activeId);
-    if (builtin) return builtin.name;
-    const k = v.keys.find(x => x.id === v.activeId);
-    return k ? k.name : GEMINI_BUILTIN_KEYS[0].name;
+    if (v.activeId) {
+        const builtin = findBuiltinKey(v.activeId);
+        if (builtin && builtin.value) return builtin.name;
+        const k = v.keys.find(x => x.id === v.activeId);
+        if (k) return k.name;
+    }
+    // No active key resolved. If there are user keys, name the first;
+    // otherwise tell the user to add one.
+    if (v.keys.length) return v.keys[0].name;
+    const usableBuiltin = GEMINI_BUILTIN_KEYS.find(k => k.value);
+    if (usableBuiltin) return usableBuiltin.name;
+    return 'Не выбран — добавьте свой';
 }
 function updateQuotaUi() {
     const s = getQuotaState();
@@ -1120,9 +1131,16 @@ function renderKeyList() {
     // null activeId means "use first builtin" — show that builtin as active.
     const effectiveActive = vault.activeId || GEMINI_BUILTIN_KEYS[0].id;
 
-    // Always show all built-in keys as switchable entries (locked, can't delete).
-    const items = GEMINI_BUILTIN_KEYS.map(k => ({ ...k }));
+    // Show built-in keys only if they actually have a value baked in.
+    // The public build ships with empty placeholders, which would otherwise
+    // appear as confusing dead slots in the list.
+    const items = GEMINI_BUILTIN_KEYS.filter(k => k.value).map(k => ({ ...k }));
     vault.keys.forEach(k => items.push({ ...k, builtin: false }));
+
+    if (items.length === 0) {
+        list.innerHTML = `<div class="api-key-empty">У вас пока нет сохранённых ключей. Нажмите <strong>+ Добавить</strong> чтобы добавить свой Gemini API-ключ. Получить ключ можно бесплатно на <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener">aistudio.google.com/apikey</a>.</div>`;
+        return;
+    }
 
     list.innerHTML = items.map(k => {
         const isActive = k.id === effectiveActive;
