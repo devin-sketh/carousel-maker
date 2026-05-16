@@ -1147,7 +1147,7 @@ body {
     }
     .editor-main {
         padding: 6px 10px 8px;
-        max-height: 44vh;
+        max-height: none;
     }
     .editor-toolbar { margin-bottom: 4px; }
     .edit-panel { margin: 8px 10px 0; padding: 12px 10px; }
@@ -1172,7 +1172,10 @@ body {
     /* Canvas area */
     .nav-arrow { width: 36px; height: 36px; }
     .slide-editor-area { gap: 8px; }
-    .canvas-wrapper { max-height: 40vh; }
+    /* On mobile, scaleCanvas() in app.js sets an exact pixel height on
+       .canvas-wrapper to match the scaled canvas, so the slide fills the
+       full width without leaving dead space on the sides. */
+    .canvas-wrapper { max-height: none; }
 
     /* Thumbnails */
     .thumbnails-strip { padding: 10px 0 4px; gap: 8px; }

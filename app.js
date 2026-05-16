@@ -1340,8 +1340,21 @@ function scaleCanvas() {
     slideCanvas.style.height = h + 'px';
     const wrapW = canvasWrapper.clientWidth - 20;
     const wrapH = canvasWrapper.clientHeight - 20;
-    const scale = Math.min(wrapW / w, wrapH / h, 1);
+    // On narrow viewports (mobile / tablet portrait) prefer filling the
+    // full available width even if that means the canvas is taller than
+    // the wrapper — the wrapper itself will grow to match.
+    const isMobile = window.innerWidth <= 600;
+    const scale = isMobile
+        ? Math.min(wrapW / w, 1)
+        : Math.min(wrapW / w, wrapH / h, 1);
     slideCanvas.style.transform = `scale(${scale})`;
+    // Reflect the rendered (scaled) height onto the wrapper so the layout
+    // below it sits flush against the canvas without a gap.
+    if (isMobile) {
+        canvasWrapper.style.height = (h * scale + 20) + 'px';
+    } else {
+        canvasWrapper.style.height = '';
+    }
 }
 
 /* ===================== TEXT COLOR DETECTION ===================== */
