@@ -1539,6 +1539,51 @@ function setupPinchZoom() {
     canvas.addEventListener('touchcancel', endPinch);
 }
 
+/* ===================== SWIPE SLIDE NAVIGATION =====================
+ * Single-finger horizontal swipe on the canvas-wrapper navigates between
+ * slides (left = next, right = prev). Only fires when:
+ * - The touch started on canvas/wrapper background (not on a draggable decor)
+ * - Horizontal distance > 50px and > vertical distance (no conflict with scroll)
+ * - Only one finger was used (two fingers = pinch)
+ */
+function setupSwipeNavigation() {
+    const wrapper = document.querySelector('.canvas-wrapper');
+    if (!wrapper || wrapper._swipeSetup) return;
+    wrapper._swipeSetup = true;
+
+    let startX = 0, startY = 0, swiping = false;
+
+    wrapper.addEventListener('touchstart', (ev) => {
+        if (ev.touches.length !== 1) return;
+        // Don't swipe if touch started on a decor element or resize handle
+        const t = ev.target;
+        if (t.closest && (t.closest('.decor-el') || t.closest('.resize-handle') || t.closest('.drag-handle'))) return;
+        startX = ev.touches[0].clientX;
+        startY = ev.touches[0].clientY;
+        swiping = true;
+    }, { passive: true });
+
+    wrapper.addEventListener('touchend', (ev) => {
+        if (!swiping) return;
+        swiping = false;
+        const endX = ev.changedTouches[0].clientX;
+        const endY = ev.changedTouches[0].clientY;
+        const dx = endX - startX;
+        const dy = endY - startY;
+        // Must be clearly horizontal and long enough
+        if (Math.abs(dx) < 50 || Math.abs(dx) < Math.abs(dy) * 1.2) return;
+        if (dx < 0 && state.currentSlide < state.slides.length - 1) {
+            // Swipe left → next slide
+            saveCurrentSlideEdits(); state.currentSlide++; renderSlide(); renderThumbnails();
+        } else if (dx > 0 && state.currentSlide > 0) {
+            // Swipe right → prev slide
+            saveCurrentSlideEdits(); state.currentSlide--; renderSlide(); renderThumbnails();
+        }
+    }, { passive: true });
+
+    wrapper.addEventListener('touchcancel', () => { swiping = false; }, { passive: true });
+}
+
 /**
  * Attach 4 corner resize handles to a positioned (% based) element. Each handle,
  * when dragged, updates the element's width/height/left/top in % of canvas and
@@ -3244,6 +3289,7 @@ function init() {
     wireApiKeyModal();
     updateQuotaUi();
     setupPinchZoom();
+    setupSwipeNavigation();
 
     // Text input
     textInput.addEventListener('input', () => {

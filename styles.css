@@ -1147,7 +1147,7 @@ body {
     }
     .editor-main {
         padding: 6px 10px 8px;
-        max-height: 62vh;
+        max-height: 44vh;
     }
     .editor-toolbar { margin-bottom: 4px; }
     .edit-panel { margin: 8px 10px 0; padding: 12px 10px; }
@@ -1172,7 +1172,7 @@ body {
     /* Canvas area */
     .nav-arrow { width: 36px; height: 36px; }
     .slide-editor-area { gap: 8px; }
-    .canvas-wrapper { max-height: 60vh; }
+    .canvas-wrapper { max-height: 40vh; }
 
     /* Thumbnails */
     .thumbnails-strip { padding: 10px 0 4px; gap: 8px; }
