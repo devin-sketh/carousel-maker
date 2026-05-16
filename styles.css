@@ -1314,6 +1314,23 @@ body {
     body[data-mtab] .canvas-wrapper {
         max-height: calc(100vh - 60px - 64px - 60px - 45vh);
     }
+    /* When a bottom sheet is open, hug the top of the editor area so the canvas
+     * sits right under the toolbar (no empty gray zone above) and the canvas is
+     * fully visible above the sheet. The slide-canvas inside also anchors to
+     * the top of its layout box so the scaled visual content tracks the wrapper
+     * top edge instead of being centered. */
+    body[data-mtab] .slide-editor-area {
+        align-items: flex-start;
+    }
+    body[data-mtab] .canvas-wrapper {
+        align-items: flex-start;
+    }
+    body[data-mtab] .slide-canvas {
+        transform-origin: center top;
+    }
+    body[data-mtab] .nav-arrow {
+        top: calc(50% - 22.5vh);
+    }
     /* Floating prev/next arrows over the canvas */
     .nav-arrow {
         width: 40px; height: 40px;
