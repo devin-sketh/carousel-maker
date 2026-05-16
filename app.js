@@ -1341,6 +1341,9 @@ function scaleCanvas() {
     const wrapW = canvasWrapper.clientWidth - 20;
     const wrapH = canvasWrapper.clientHeight - 20;
     const scale = Math.min(wrapW / w, wrapH / h, 1);
+    // Expose the scale as a CSS var so slide-change keyframes can compose
+    // translateX with the same scale().
+    slideCanvas.style.setProperty('--canvas-scale', String(scale));
     slideCanvas.style.transform = `scale(${scale})`;
 }
 
@@ -1539,6 +1542,52 @@ function setupPinchZoom() {
     canvas.addEventListener('touchcancel', endPinch);
 }
 
+/* ===================== SLIDE NAVIGATION (animated) =====================
+ * Single helper that all next/prev callers (buttons + swipe) go through.
+ * On mobile-sized viewports (<=900px) we animate the canvas sliding
+ * left/right; on desktop we just re-render instantly.
+ */
+let _slideAnimBusy = false;
+function navigateSlide(direction) {
+    if (_slideAnimBusy) return;
+    const target = state.currentSlide + direction;
+    if (target < 0 || target >= state.slides.length) return;
+
+    const mobile = window.innerWidth <= 900;
+    const canvas = slideCanvas;
+
+    if (!mobile || !canvas) {
+        saveCurrentSlideEdits();
+        state.currentSlide = target;
+        renderSlide();
+        renderThumbnails();
+        return;
+    }
+
+    _slideAnimBusy = true;
+    const outCls = direction > 0 ? 'slide-out-left' : 'slide-out-right';
+    const inCls  = direction > 0 ? 'slide-in-right' : 'slide-in-left';
+
+    canvas.classList.remove('slide-in-left', 'slide-in-right', 'slide-out-left', 'slide-out-right');
+    // Force a reflow so re-adding the class restarts the animation
+    void canvas.offsetWidth;
+    canvas.classList.add(outCls);
+
+    setTimeout(() => {
+        saveCurrentSlideEdits();
+        state.currentSlide = target;
+        renderSlide();
+        renderThumbnails();
+        canvas.classList.remove(outCls);
+        void canvas.offsetWidth;
+        canvas.classList.add(inCls);
+        setTimeout(() => {
+            canvas.classList.remove(inCls);
+            _slideAnimBusy = false;
+        }, 220);
+    }, 170);
+}
+
 /* ===================== SWIPE SLIDE NAVIGATION =====================
  * Single-finger horizontal swipe on the canvas-wrapper navigates between
  * slides (left = next, right = prev). Only fires when:
@@ -1572,16 +1621,92 @@ function setupSwipeNavigation() {
         const dy = endY - startY;
         // Must be clearly horizontal and long enough
         if (Math.abs(dx) < 50 || Math.abs(dx) < Math.abs(dy) * 1.2) return;
-        if (dx < 0 && state.currentSlide < state.slides.length - 1) {
+        if (dx < 0) {
             // Swipe left → next slide
-            saveCurrentSlideEdits(); state.currentSlide++; renderSlide(); renderThumbnails();
-        } else if (dx > 0 && state.currentSlide > 0) {
+            navigateSlide(1);
+        } else if (dx > 0) {
             // Swipe right → prev slide
-            saveCurrentSlideEdits(); state.currentSlide--; renderSlide(); renderThumbnails();
+            navigateSlide(-1);
         }
     }, { passive: true });
 
     wrapper.addEventListener('touchcancel', () => { swiping = false; }, { passive: true });
+}
+
+/* ===================== MOBILE BOTTOM TAB BAR =====================
+ * On narrow viewports the sidebar / edit-panel are hidden by default
+ * and revealed as bottom sheets when the user taps a tab. We:
+ *   1) Tag each .sidebar-section with data-mtab="style" (default) or
+ *      "decor" depending on what's inside (so CSS can filter)
+ *   2) Wire up tab buttons to set body[data-mtab]
+ *   3) Wire up the backdrop and tapping the active tab again to close
+ */
+function setupMobileTabbar() {
+    const tabbar = document.getElementById('mobile-tabbar');
+    if (!tabbar || tabbar._mtabSetup) return;
+    tabbar._mtabSetup = true;
+
+    // Tag sidebar sections so CSS can filter them by tab.
+    const sidebar = document.querySelector('.editor-sidebar');
+    if (sidebar) {
+        sidebar.querySelectorAll('.sidebar-section').forEach(s => {
+            if (!s.hasAttribute('data-mtab')) s.setAttribute('data-mtab', 'style');
+        });
+        const decorSec = sidebar.querySelector('#decor-section');
+        if (decorSec) decorSec.setAttribute('data-mtab', 'decor');
+        const moveSec = sidebar.querySelector('#move-mode-section');
+        if (moveSec) moveSec.setAttribute('data-mtab', 'decor');
+    }
+
+    // Re-scale the canvas after the sheet transition completes so the slide
+    // shrinks to fit the visible area above the sheet (and grows back when
+    // the sheet closes).
+    const rescaleAfterSheet = () => {
+        // The CSS transition on canvas-wrapper max-height is 0.22s. Re-run
+        // scaleCanvas on each animation frame for ~250ms to follow it.
+        const start = performance.now();
+        const tick = (t) => {
+            if (typeof scaleCanvas === 'function') scaleCanvas();
+            if (t - start < 260) requestAnimationFrame(tick);
+        };
+        requestAnimationFrame(tick);
+    };
+
+    const setActiveTab = (name) => {
+        const cur = document.body.getAttribute('data-mtab');
+        if (cur === name) {
+            // Tapping the active tab again closes the sheet.
+            document.body.removeAttribute('data-mtab');
+        } else {
+            document.body.setAttribute('data-mtab', name);
+        }
+        tabbar.querySelectorAll('.mobile-tab').forEach(b => {
+            b.classList.toggle('active', b.dataset.mtab === document.body.getAttribute('data-mtab'));
+        });
+        rescaleAfterSheet();
+    };
+
+    tabbar.querySelectorAll('.mobile-tab').forEach(btn => {
+        btn.addEventListener('click', () => setActiveTab(btn.dataset.mtab));
+    });
+
+    const backdrop = document.getElementById('mobile-sheet-backdrop');
+    if (backdrop) {
+        backdrop.addEventListener('click', () => {
+            document.body.removeAttribute('data-mtab');
+            tabbar.querySelectorAll('.mobile-tab').forEach(b => b.classList.remove('active'));
+            rescaleAfterSheet();
+        });
+    }
+
+    // Close any open sheet when the viewport grows past mobile width (e.g.,
+    // user rotates phone to landscape or resizes desktop window).
+    window.addEventListener('resize', () => {
+        if (window.innerWidth > 600 && document.body.hasAttribute('data-mtab')) {
+            document.body.removeAttribute('data-mtab');
+            tabbar.querySelectorAll('.mobile-tab').forEach(b => b.classList.remove('active'));
+        }
+    });
 }
 
 /**
@@ -3290,6 +3415,7 @@ function init() {
     updateQuotaUi();
     setupPinchZoom();
     setupSwipeNavigation();
+    setupMobileTabbar();
 
     // Text input
     textInput.addEventListener('input', () => {
@@ -3416,17 +3542,9 @@ function init() {
         fetchPhotos(state.pexels.query, false);
     });
 
-    // Slide navigation
-    btnPrevSlide.addEventListener('click', () => {
-        if (state.currentSlide > 0) {
-            saveCurrentSlideEdits(); state.currentSlide--; renderSlide(); renderThumbnails();
-        }
-    });
-    btnNextSlide.addEventListener('click', () => {
-        if (state.currentSlide < state.slides.length - 1) {
-            saveCurrentSlideEdits(); state.currentSlide++; renderSlide(); renderThumbnails();
-        }
-    });
+    // Slide navigation (animated on mobile)
+    btnPrevSlide.addEventListener('click', () => navigateSlide(-1));
+    btnNextSlide.addEventListener('click', () => navigateSlide(1));
 
     // Add slide
     btnAddSlide.addEventListener('click', () => {

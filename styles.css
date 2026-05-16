@@ -1023,6 +1023,10 @@ body {
 @keyframes spin { to { transform: rotate(360deg); } }
 .loading-content p { font-size: 0.95rem; color: var(--text-secondary); }
 
+/* Hide mobile-only elements on desktop. Mobile @media rules below override. */
+.mobile-tabbar { display: none; }
+.mobile-sheet-backdrop { display: none; }
+
 /* ===================== RESPONSIVE ===================== */
 
 /* Tablet */
@@ -1069,6 +1073,27 @@ body {
     .sidebar-actions { flex-direction: row; margin-top: 0; }
     .steps-indicator { display: none; }
     .ss-grid { grid-template-columns: repeat(2, 1fr); }
+}
+
+/* Slide-change animation keyframes (used on mobile via JS). The transform also
+ * has to preserve the existing scale() set by scaleCanvas(), so each keyframe
+ * uses CSS var --canvas-scale (default 1) which the JS animation code sets
+ * before adding the class. */
+@keyframes slide-out-left {
+    from { transform: scale(var(--canvas-scale, 1)) translateX(0); opacity: 1; }
+    to   { transform: scale(var(--canvas-scale, 1)) translateX(-40%); opacity: 0; }
+}
+@keyframes slide-out-right {
+    from { transform: scale(var(--canvas-scale, 1)) translateX(0); opacity: 1; }
+    to   { transform: scale(var(--canvas-scale, 1)) translateX(40%); opacity: 0; }
+}
+@keyframes slide-in-right {
+    from { transform: scale(var(--canvas-scale, 1)) translateX(40%); opacity: 0; }
+    to   { transform: scale(var(--canvas-scale, 1)) translateX(0); opacity: 1; }
+}
+@keyframes slide-in-left {
+    from { transform: scale(var(--canvas-scale, 1)) translateX(-40%); opacity: 0; }
+    to   { transform: scale(var(--canvas-scale, 1)) translateX(0); opacity: 1; }
 }
 
 /* Mobile */
@@ -1146,8 +1171,9 @@ body {
         overflow: visible;
     }
     .editor-main {
-        padding: 6px 10px 8px;
-        max-height: 70vh;
+        padding: 6px 10px 64px;
+        max-height: none;
+        flex: 1 1 auto;
     }
     .editor-toolbar {
         margin-bottom: 4px;
@@ -1159,6 +1185,99 @@ body {
     }
     .editor-toolbar::-webkit-scrollbar { display: none; }
     .editor-toolbar > * { flex-shrink: 0; }
+
+    /* Mobile bottom-tab layout: canvas fills the screen, sidebar / edit-panel
+       become bottom sheets revealed by tapping a tab. */
+    .edit-panel { display: none; }
+    .editor-sidebar { display: none; }
+
+    body[data-mtab="text"] .edit-panel,
+    body[data-mtab="style"] .editor-sidebar,
+    body[data-mtab="decor"] .editor-sidebar,
+    body[data-mtab="export"] .editor-sidebar {
+        display: block;
+        position: fixed;
+        left: 0; right: 0;
+        bottom: 60px;
+        max-height: 45vh;
+        overflow-y: auto;
+        background: var(--surface);
+        border-top: 1px solid var(--border);
+        border-radius: 16px 16px 0 0;
+        z-index: 199;
+        padding: 14px 14px 16px;
+        box-shadow: 0 -8px 24px rgba(0,0,0,0.12);
+        animation: mobile-sheet-up 0.24s ease-out;
+    }
+    /* Small drag-handle visual at the top of the sheet */
+    body[data-mtab="text"] .edit-panel::before,
+    body[data-mtab="style"] .editor-sidebar::before,
+    body[data-mtab="decor"] .editor-sidebar::before,
+    body[data-mtab="export"] .editor-sidebar::before {
+        content: ''; display: block; width: 36px; height: 4px;
+        background: var(--border); border-radius: 2px;
+        margin: 0 auto 10px;
+    }
+    @keyframes mobile-sheet-up {
+        from { transform: translateY(100%); }
+        to { transform: translateY(0); }
+    }
+
+    /* Within sidebar, hide sections that don't match the active tab. */
+    body[data-mtab="style"] .editor-sidebar .sidebar-section[data-mtab="decor"],
+    body[data-mtab="style"] .editor-sidebar .sidebar-actions { display: none; }
+    body[data-mtab="decor"] .editor-sidebar .sidebar-section:not([data-mtab="decor"]),
+    body[data-mtab="decor"] .editor-sidebar .sidebar-actions { display: none; }
+    body[data-mtab="export"] .editor-sidebar .sidebar-section { display: none; }
+
+    /* Backdrop only shows when a sheet is open */
+    .mobile-sheet-backdrop { display: none; }
+    body[data-mtab] .mobile-sheet-backdrop {
+        display: block;
+        position: fixed;
+        inset: 0 0 60px 0;
+        background: rgba(0,0,0,0.32);
+        z-index: 198;
+        animation: mobile-fade-in 0.18s ease-out;
+    }
+    @keyframes mobile-fade-in {
+        from { opacity: 0; }
+        to { opacity: 1; }
+    }
+
+    /* Bottom tab bar */
+    .mobile-tabbar {
+        display: flex;
+        position: fixed;
+        bottom: 0; left: 0; right: 0;
+        height: 60px;
+        background: var(--surface);
+        border-top: 1px solid var(--border);
+        z-index: 200;
+        padding: 4px 4px env(safe-area-inset-bottom, 4px);
+    }
+    .mobile-tab {
+        flex: 1;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        gap: 2px;
+        background: transparent;
+        border: none;
+        color: var(--text-secondary);
+        font-size: 0.7rem;
+        font-weight: 500;
+        cursor: pointer;
+        padding: 6px 2px;
+        border-radius: 8px;
+        transition: color 0.15s, background 0.15s;
+    }
+    .mobile-tab svg { stroke: currentColor; }
+    .mobile-tab.active {
+        color: var(--primary);
+        background: rgba(124, 58, 237, 0.08);
+    }
     .edit-panel { margin: 8px 10px 0; padding: 12px 10px; }
     .editor-sidebar {
         order: 3;
@@ -1178,14 +1297,49 @@ body {
     .btn-export { padding: 16px; font-size: 1rem; }
     .btn-export-secondary { padding: 12px; }
 
-    /* Canvas area */
-    .nav-arrow { width: 36px; height: 36px; }
-    .slide-editor-area { gap: 8px; }
-    .canvas-wrapper { max-height: 55vh; }
+    /* Canvas area: fills available space between toolbar and bottom tab bar.
+     * NOTE: do NOT put `overflow: hidden` on canvas-wrapper or slide-editor-area.
+     * The slide-canvas has a 1080x1350 layout box that gets visually shrunk via
+     * transform:scale, but overflow clipping is applied on the layout box
+     * (BEFORE transform), which would clip our small scaled canvas down to the
+     * wrapper's bounds. Body has `overflow-x: clip` to keep slide-in/out
+     * animation bleed from causing horizontal scroll. */
+    .slide-editor-area { gap: 0; flex: 1 1 auto; min-height: 0; position: relative; }
+    .canvas-wrapper {
+        max-height: calc(100vh - 60px - 64px - 60px); /* viewport - tabbar - header - toolbar */
+        flex: 1 1 auto;
+        transition: max-height 0.22s ease-out;
+    }
+    /* When a bottom sheet is open, shrink the canvas so it stays fully visible above the sheet */
+    body[data-mtab] .canvas-wrapper {
+        max-height: calc(100vh - 60px - 64px - 60px - 45vh);
+    }
+    /* Floating prev/next arrows over the canvas */
+    .nav-arrow {
+        width: 40px; height: 40px;
+        position: absolute; top: 50%;
+        transform: translateY(-50%);
+        z-index: 10;
+        background: rgba(255,255,255,0.88);
+        backdrop-filter: blur(6px);
+        -webkit-backdrop-filter: blur(6px);
+        border: 1px solid rgba(0,0,0,0.08);
+        box-shadow: 0 2px 10px rgba(0,0,0,0.16);
+        color: #333;
+    }
+    .nav-arrow.prev { left: 6px; }
+    .nav-arrow.next { right: 6px; }
+    .nav-arrow:hover, .nav-arrow:active { background: #fff; border-color: var(--primary); color: var(--primary); }
+
+    /* Slide-change animation (applied via JS) */
+    .slide-canvas.slide-out-left { animation: slide-out-left 0.18s ease-in forwards; }
+    .slide-canvas.slide-out-right { animation: slide-out-right 0.18s ease-in forwards; }
+    .slide-canvas.slide-in-right { animation: slide-in-right 0.22s ease-out; }
+    .slide-canvas.slide-in-left { animation: slide-in-left 0.22s ease-out; }
 
     /* Thumbnails */
-    .thumbnails-strip { padding: 10px 0 4px; gap: 8px; }
-    .thumbnail { width: 52px; }
+    .thumbnails-strip { padding: 8px 0 4px; gap: 8px; }
+    .thumbnail { width: 48px; }
 
     /* Toast */
     .toast-container { bottom: 16px; right: 16px; left: 16px; }
