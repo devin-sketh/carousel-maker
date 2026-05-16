@@ -1147,9 +1147,18 @@ body {
     }
     .editor-main {
         padding: 6px 10px 8px;
-        max-height: none;
+        max-height: 70vh;
     }
-    .editor-toolbar { margin-bottom: 4px; }
+    .editor-toolbar {
+        margin-bottom: 4px;
+        overflow-x: auto;
+        flex-wrap: nowrap;
+        -webkit-overflow-scrolling: touch;
+        scrollbar-width: none;
+        scroll-snap-type: x proximity;
+    }
+    .editor-toolbar::-webkit-scrollbar { display: none; }
+    .editor-toolbar > * { flex-shrink: 0; }
     .edit-panel { margin: 8px 10px 0; padding: 12px 10px; }
     .editor-sidebar {
         order: 3;
@@ -1172,10 +1181,7 @@ body {
     /* Canvas area */
     .nav-arrow { width: 36px; height: 36px; }
     .slide-editor-area { gap: 8px; }
-    /* On mobile, scaleCanvas() in app.js sets an exact pixel height on
-       .canvas-wrapper to match the scaled canvas, so the slide fills the
-       full width without leaving dead space on the sides. */
-    .canvas-wrapper { max-height: none; }
+    .canvas-wrapper { max-height: 55vh; }
 
     /* Thumbnails */
     .thumbnails-strip { padding: 10px 0 4px; gap: 8px; }
