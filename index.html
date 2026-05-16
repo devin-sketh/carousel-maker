@@ -596,6 +596,10 @@
                             <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M8 1l1.5 3.5L13 6l-3.5 1.5L8 11 6.5 7.5 3 6l3.5-1.5L8 1z" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round" fill="currentColor" opacity="0.3"/><path d="M12 10l.75 1.75L14.5 12.5l-1.75.75L12 15l-.75-1.75-1.75-.75 1.75-.75L12 10z" stroke="currentColor" stroke-width="1" stroke-linejoin="round" fill="currentColor" opacity="0.3"/></svg>
                             AI формат
                         </button>
+                        <button class="btn-secondary btn-sm btn-undo" id="btn-undo" hidden title="Откатить последнее действие (Ctrl+Z)">
+                            <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M3 8c0-2.8 2.2-5 5-5s5 2.2 5 5-2.2 5-5 5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><path d="M5 5L3 8l3 2" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" fill="none"/></svg>
+                            Назад <span class="undo-count" id="undo-count"></span>
+                        </button>
                         <button class="btn-secondary btn-sm btn-ai-undo" id="btn-ai-undo" hidden title="Откатить последний AI-результат">
                             <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M3 8c0-2.8 2.2-5 5-5s5 2.2 5 5-2.2 5-5 5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><path d="M5 5L3 8l3 2" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" fill="none"/></svg>
                             Откатить AI <span class="ai-undo-count" id="ai-undo-count"></span>

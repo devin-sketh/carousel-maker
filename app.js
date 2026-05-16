@@ -461,6 +461,7 @@ const DECOR_PRESETS = [
 function addDecorPreset(presetId) {
     const preset = DECOR_PRESETS.find(p => p.id === presetId);
     if (!preset) return;
+    if (typeof pushEditHistory === 'function') pushEditHistory('До добавления декора');
     if (!state.settings.decorations) state.settings.decorations = [];
     const bgIsLight = isLightBg(state.selectedBg);
     if (preset.multi) {
@@ -477,6 +478,7 @@ function addDecorPreset(presetId) {
 /* Remove last decoration (undo for the Decor panel). */
 function removeLastDecor() {
     if (!state.settings.decorations || state.settings.decorations.length === 0) return;
+    if (typeof pushEditHistory === 'function') pushEditHistory('До удаления последнего декора');
     state.settings.decorations.pop();
     state.settings.photoSlot = detectPhotoSlot(state.settings.decorations);
     renderSlide();
@@ -485,6 +487,10 @@ function removeLastDecor() {
 
 /* Clear all decorations on current slide. */
 function clearAllDecor() {
+    if (state.settings.decorations && state.settings.decorations.length > 0
+        && typeof pushEditHistory === 'function') {
+        pushEditHistory('До очистки всех декоров');
+    }
     state.settings.decorations = [];
     state.settings.photoSlot = null;
     state.settings.slotPhotoSrc = null;
@@ -628,6 +634,11 @@ let state = {
     currentSlide: 0,
     // Stack of pre-AI-mutation snapshots (capped to AI_HISTORY_LIMIT).
     aiHistory: [],
+    // Stack of pre-action state snapshots for the universal undo button
+    // (Ctrl+Z / «Назад»). Covers drag, resize, decor add/remove/modify,
+    // layout/position changes, background/color swaps, etc. Capped to
+    // EDIT_HISTORY_LIMIT to bound memory.
+    editHistory: [],
     // Index of decoration the user is currently editing (or null when none).
     // Lives on root state because it's purely UI focus, not slide content.
     selectedDecorIdx: null,
@@ -929,6 +940,7 @@ function renderLayouts() {
 
     layoutOptions.querySelectorAll('.layout-card').forEach(card => {
         card.addEventListener('click', () => {
+            if (typeof pushEditHistory === 'function') pushEditHistory('До смены макета');
             $$('.layout-card').forEach(c => c.classList.remove('selected'));
             card.classList.add('selected');
             state.selectedLayout = LAYOUTS.find(l => l.id === card.dataset.layout);
@@ -1055,6 +1067,7 @@ function wireDecorActions() {
     const opacityVal = document.getElementById('decor-opacity-val');
     if (opacityInput) {
         opacityInput.addEventListener('input', () => {
+            if (typeof pushEditHistoryDebounced === 'function') pushEditHistoryDebounced('До смены прозрачности');
             const pct = parseInt(opacityInput.value, 10);
             if (opacityVal) opacityVal.textContent = `${pct}%`;
             patchSelectedDecorMods({ opacity: pct / 100 });
@@ -1063,6 +1076,7 @@ function wireDecorActions() {
     const outlineToggle = document.getElementById('decor-outline-only');
     if (outlineToggle) {
         outlineToggle.addEventListener('change', () => {
+            if (typeof pushEditHistory === 'function') pushEditHistory('До переключения обводки');
             patchSelectedDecorMods({ outlineOnly: outlineToggle.checked });
         });
     }
@@ -1070,6 +1084,7 @@ function wireDecorActions() {
     const outlineWidthVal = document.getElementById('decor-outline-width-val');
     if (outlineWidth) {
         outlineWidth.addEventListener('input', () => {
+            if (typeof pushEditHistoryDebounced === 'function') pushEditHistoryDebounced('До смены толщины обводки');
             const w = parseInt(outlineWidth.value, 10);
             if (outlineWidthVal) outlineWidthVal.textContent = `${w}px`;
             patchSelectedDecorMods({ outlineWidth: w });
@@ -1078,6 +1093,7 @@ function wireDecorActions() {
     const outlineColor = document.getElementById('decor-outline-color');
     if (outlineColor) {
         outlineColor.addEventListener('input', () => {
+            if (typeof pushEditHistoryDebounced === 'function') pushEditHistoryDebounced('До смены цвета обводки');
             patchSelectedDecorMods({ outlineColor: outlineColor.value });
         });
     }
@@ -1095,6 +1111,7 @@ function wireDecorActions() {
             const idx = state.selectedDecorIdx;
             const decos = state.settings.decorations;
             if (idx === null || !decos) return;
+            if (typeof pushEditHistory === 'function') pushEditHistory('До удаления декора');
             decos.splice(idx, 1);
             if (typeof detectPhotoSlot === 'function') {
                 state.settings.photoSlot = detectPhotoSlot(decos);
@@ -1410,6 +1427,10 @@ function makeDraggable(el, opts = {}) {
             heightPct: er.height / cr.height * 100,
             cw: cr.width,
             ch: cr.height,
+            // Track whether the user actually moved the element so we only
+            // push history for real drags (not stray clicks).
+            moved: false,
+            historyPushed: false,
         };
         try { el.setPointerCapture(e.pointerId); } catch (_) {}
         el.classList.add('dragging');
@@ -1417,8 +1438,17 @@ function makeDraggable(el, opts = {}) {
 
     const onMove = (e) => {
         if (!drag) return;
-        const dxPct = (e.clientX - drag.startX) / drag.cw * 100;
-        const dyPct = (e.clientY - drag.startY) / drag.ch * 100;
+        const dxPx = e.clientX - drag.startX;
+        const dyPx = e.clientY - drag.startY;
+        // Push a history entry the first time the user clearly moves the
+        // element (>3px) so undo restores the pre-drag position.
+        if (!drag.historyPushed && (Math.abs(dxPx) + Math.abs(dyPx) > 3)) {
+            drag.historyPushed = true;
+            drag.moved = true;
+            if (typeof pushEditHistory === 'function') pushEditHistory('Перед перетаскиванием');
+        }
+        const dxPct = dxPx / drag.cw * 100;
+        const dyPct = dyPx / drag.ch * 100;
         const newLeft = drag.startLeftPct + dxPct;
         const newTop = drag.startTopPct + dyPct;
         el.style.left = newLeft + '%';
@@ -1604,9 +1634,25 @@ function setupSwipeNavigation() {
 
     wrapper.addEventListener('touchstart', (ev) => {
         if (ev.touches.length !== 1) return;
-        // Don't swipe if touch started on a decor element or resize handle
+        // Don't swipe if the user is interacting with a draggable element
+        // (decoration, photo slot, card overlay, title, body) or while the
+        // editor is in move-mode (because then every touch is a potential
+        // drag). Without this guard, dragging a decor on mobile would
+        // «swipe» mid-drag and switch to the next slide.
+        if (state.settings && state.settings.moveMode) return;
         const t = ev.target;
-        if (t.closest && (t.closest('.decor-el') || t.closest('.resize-handle') || t.closest('.drag-handle'))) return;
+        if (t.closest && (
+            t.closest('.ai-decoration') ||
+            t.closest('.decor-el') ||
+            t.closest('.ai-card-overlay') ||
+            t.closest('.slot-photo') ||
+            t.closest('.resize-handle') ||
+            t.closest('.drag-handle') ||
+            t.id === 'slide-title' ||
+            t.id === 'slide-body' ||
+            (t.closest('#slide-title')) ||
+            (t.closest('#slide-body'))
+        )) return;
         startX = ev.touches[0].clientX;
         startY = ev.touches[0].clientY;
         swiping = true;
@@ -1735,6 +1781,8 @@ function makeResizable(el, opts = {}) {
         const onDown = (e) => {
             e.preventDefault();
             e.stopPropagation();
+            // Snapshot pre-resize state so undo restores it.
+            if (typeof pushEditHistory === 'function') pushEditHistory('До изменения размера');
             const cr = slideCanvas.getBoundingClientRect();
             const er = el.getBoundingClientRect();
             drag = {
@@ -3161,6 +3209,103 @@ function syncLayoutCards() {
     });
 }
 
+/* ===================== UNIVERSAL EDIT HISTORY =====================
+ * Every meaningful user mutation (drag, resize, decor add/remove/modify,
+ * layout/position change, color/font/background swap, etc.) snapshots
+ * the relevant portion of state so the user can press «Назад» (Ctrl+Z
+ * on desktop) and step backwards. Independent of AI history so each
+ * operates on its own button.
+ */
+const EDIT_HISTORY_LIMIT = 50;
+
+/* Deep-clone a value via JSON. Used for snapshotting slides/settings into
+ * history so future mutations don't leak back into historical entries. */
+function deepClone(v) {
+    try { return JSON.parse(JSON.stringify(v)); }
+    catch { return v; }
+}
+
+/* Build a snapshot of everything that user actions can mutate so undo
+ * can fully restore. Cheap-ish because most fields are small. */
+function snapshotEditState() {
+    return {
+        slides: deepClone(state.slides),
+        settings: deepClone(state.settings),
+        currentSlide: state.currentSlide,
+        selectedLayout: deepClone(state.selectedLayout),
+        selectedBg: deepClone(state.selectedBg),
+        selectedDecorIdx: state.selectedDecorIdx,
+    };
+}
+
+/* Push a snapshot onto editHistory. Callers do this BEFORE applying a
+ * mutation so undo restores the pre-mutation state. */
+let _editHistoryDebouncing = null;
+function pushEditHistory(label) {
+    if (!state.editHistory) state.editHistory = [];
+    // Drop the oldest entries past the limit so memory is bounded.
+    state.editHistory.push({
+        label: label || 'Действие',
+        snap: snapshotEditState(),
+        timestamp: Date.now(),
+    });
+    if (state.editHistory.length > EDIT_HISTORY_LIMIT) {
+        state.editHistory.splice(0, state.editHistory.length - EDIT_HISTORY_LIMIT);
+    }
+    updateUndoUi();
+}
+
+/* Debounced version for frequent events (text input, slider drag).
+ * Coalesces a burst of changes into one history entry. */
+function pushEditHistoryDebounced(label, delay = 500) {
+    if (_editHistoryDebouncing) clearTimeout(_editHistoryDebouncing);
+    // Take the snapshot NOW (pre-mutation state) so the first keystroke
+    // is what we'd return to, not the last.
+    const snap = snapshotEditState();
+    _editHistoryDebouncing = setTimeout(() => {
+        if (!state.editHistory) state.editHistory = [];
+        state.editHistory.push({
+            label: label || 'Действие',
+            snap: snap,
+            timestamp: Date.now(),
+        });
+        if (state.editHistory.length > EDIT_HISTORY_LIMIT) {
+            state.editHistory.splice(0, state.editHistory.length - EDIT_HISTORY_LIMIT);
+        }
+        _editHistoryDebouncing = null;
+        updateUndoUi();
+    }, delay);
+}
+
+/* Undo the most recent action by restoring its snapshot. */
+function undoLastEdit() {
+    if (!state.editHistory || state.editHistory.length === 0) return;
+    const entry = state.editHistory.pop();
+    const s = entry.snap;
+    state.slides = s.slides;
+    state.settings = s.settings;
+    state.currentSlide = Math.min(s.currentSlide, state.slides.length - 1);
+    if (state.currentSlide < 0) state.currentSlide = 0;
+    state.selectedLayout = s.selectedLayout;
+    state.selectedBg = s.selectedBg;
+    state.selectedDecorIdx = s.selectedDecorIdx;
+    renderSlide();
+    renderThumbnails();
+    if (typeof syncDecorDetailPanel === 'function') syncDecorDetailPanel();
+    if (typeof syncSidebarWithState === 'function') syncSidebarWithState();
+    updateUndoUi();
+    showToast(`Откатил: ${entry.label}`);
+}
+
+/* Refresh undo button visibility + counter badge. */
+function updateUndoUi() {
+    const n = state.editHistory ? state.editHistory.length : 0;
+    const btn = document.getElementById('btn-undo');
+    const cnt = document.getElementById('undo-count');
+    if (btn) btn.hidden = n === 0;
+    if (cnt) cnt.textContent = n > 0 ? String(n) : '';
+}
+
 /* ===================== AI HISTORY =====================
  * Every AI mutation (split, format, auto-highlight) snapshots the
  * pre-mutation state.slides into state.aiHistory so the user can roll
@@ -3715,6 +3860,7 @@ function init() {
     // user thinks the preset is broken.
     $$('.position-btn').forEach(btn => {
         btn.addEventListener('click', () => {
+            if (typeof pushEditHistory === 'function') pushEditHistory('До смены позиции текста');
             $$('.position-btn').forEach(b => b.classList.remove('active'));
             btn.classList.add('active');
             state.settings.textPosition = btn.dataset.position;
@@ -3741,6 +3887,7 @@ function init() {
     const editBodyInput = $('#edit-body-input');
     if (editTitleInput) {
         editTitleInput.addEventListener('input', () => {
+            if (typeof pushEditHistoryDebounced === 'function') pushEditHistoryDebounced('До правки заголовка', 700);
             const slide = state.slides[state.currentSlide];
             if (!slide) return;
             slide.title = editTitleInput.value;
@@ -3751,6 +3898,7 @@ function init() {
     }
     if (editBodyInput) {
         editBodyInput.addEventListener('input', () => {
+            if (typeof pushEditHistoryDebounced === 'function') pushEditHistoryDebounced('До правки текста', 700);
             const slide = state.slides[state.currentSlide];
             if (!slide) return;
             slide.body = editBodyInput.value;
@@ -3762,6 +3910,7 @@ function init() {
 
     // Sync inline edits back to edit panel
     slideTitle.addEventListener('input', () => {
+        if (typeof pushEditHistoryDebounced === 'function') pushEditHistoryDebounced('До правки заголовка', 700);
         const slide = state.slides[state.currentSlide];
         if (!slide) return;
         slide.title = slideTitle.innerText;
@@ -3771,6 +3920,7 @@ function init() {
         renderThumbnails();
     });
     slideBody.addEventListener('input', () => {
+        if (typeof pushEditHistoryDebounced === 'function') pushEditHistoryDebounced('До правки текста', 700);
         const slide = state.slides[state.currentSlide];
         if (!slide) return;
         slide.body = slideBody.innerText;
@@ -3840,6 +3990,7 @@ function init() {
         styleChipsContainer.querySelectorAll('.highlight-style-chip').forEach(chip => {
             chip.classList.toggle('active', chip.dataset.style === (state.settings.highlightStyle || 'marker'));
             chip.addEventListener('click', () => {
+                if (typeof pushEditHistory === 'function') pushEditHistory('До смены стиля выделения');
                 state.settings.highlightStyle = chip.dataset.style;
                 styleChipsContainer.querySelectorAll('.highlight-style-chip').forEach(c => c.classList.remove('active'));
                 chip.classList.add('active');
@@ -3878,6 +4029,32 @@ function init() {
         btnAiFormat.addEventListener('click', aiFormatSlides);
     }
 
+    // Universal undo (covers all non-AI actions). Wired to a top-of-editor
+    // toolbar button + Ctrl+Z / Cmd+Z keyboard shortcut.
+    const btnUndo = $('#btn-undo');
+    if (btnUndo) btnUndo.addEventListener('click', undoLastEdit);
+
+    // Ctrl+Z / Cmd+Z global handler — but skip when the user is typing in a
+    // contentEditable (slide-title/body) or input/textarea, because the
+    // browser's native text undo should take priority there.
+    document.addEventListener('keydown', (e) => {
+        if (!(e.key === 'z' || e.key === 'Z')) return;
+        if (!(e.ctrlKey || e.metaKey)) return;
+        if (e.shiftKey || e.altKey) return;
+        const active = document.activeElement;
+        if (active && (
+            active.tagName === 'INPUT' ||
+            active.tagName === 'TEXTAREA' ||
+            active.isContentEditable
+        )) return;
+        // Only act in the editor (step 3); ignore on the other steps to
+        // avoid surprising the user during text input or template selection.
+        const step3 = document.getElementById('step-3');
+        if (!step3 || !step3.classList.contains('active')) return;
+        e.preventDefault();
+        undoLastEdit();
+    });
+
     // AI undo + history modal
     const btnAiUndo = $('#btn-ai-undo');
     if (btnAiUndo) btnAiUndo.addEventListener('click', undoLastAiMutation);
@@ -3891,6 +4068,7 @@ function init() {
     }
     // Initial UI sync (history may be empty, hides the buttons).
     updateAiHistoryUi();
+    updateUndoUi();
 
     // Template upload
     const templateUploadArea = $('#template-upload-area');

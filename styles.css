@@ -1479,13 +1479,18 @@ body {
 }
 
 /* AI undo / history buttons */
-.btn-ai-undo, .btn-ai-history {
+.btn-ai-undo, .btn-ai-history, .btn-undo {
     display: inline-flex; align-items: center; gap: 6px;
 }
-.btn-ai-undo:not([hidden]), .btn-ai-history:not([hidden]) { display: inline-flex; }
-.ai-undo-count {
+.btn-ai-undo:not([hidden]), .btn-ai-history:not([hidden]), .btn-undo:not([hidden]) { display: inline-flex; }
+.ai-undo-count, .undo-count {
     background: #6366f1; color: #fff; padding: 1px 6px;
     border-radius: 10px; font-size: 0.7rem; font-weight: 700;
+}
+/* Universal undo button uses a slightly different accent so it's visually
+ * distinct from the AI-specific undo. */
+.btn-undo .undo-count {
+    background: #475569;
 }
 
 /* AI history modal */
