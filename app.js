@@ -642,6 +642,11 @@ let state = {
     // Index of decoration the user is currently editing (or null when none).
     // Lives on root state because it's purely UI focus, not slide content.
     selectedDecorIdx: null,
+    // Which non-decor draggable is currently selected: 'title' | 'body' |
+    // 'card' | null. When ANY element is selected (text or decor) all others
+    // become non-interactive (pointer-events:none) so dragging one doesn't
+    // accidentally grab another. Tap an empty part of the canvas to clear.
+    selectedTextEl: null,
     selectedLayout: LAYOUTS[0],
     selectedBg: { type: 'gradient', value: GRADIENTS[0] },
     settings: {
@@ -1123,15 +1128,16 @@ function wireDecorActions() {
         });
     }
 
-    // Click on empty canvas area deselects the decor.
+    // Click on empty canvas area deselects whatever was selected.
     const canvas = document.getElementById('slide-canvas');
     if (canvas) {
-        canvas.addEventListener('mousedown', (ev) => {
+        canvas.addEventListener('pointerdown', (ev) => {
             // Only deselect when click lands on the canvas itself or content area,
-            // not on a decoration (those stopPropagation in their own handler).
+            // not on a decoration/title/body (those stopPropagation in their own handler).
             if (ev.target === canvas || ev.target.classList?.contains('slide-content-area')) {
-                if (state.selectedDecorIdx !== null) {
+                if (state.selectedDecorIdx !== null || state.selectedTextEl !== null) {
                     state.selectedDecorIdx = null;
+                    state.selectedTextEl = null;
                     renderSlide();
                     syncDecorDetailPanel();
                 }
@@ -2128,23 +2134,101 @@ function renderSlide() {
 
     // Wire up move-mode dragging for title and body. In edit mode they
     // remain contentEditable; in move mode they snap to a draggable rect.
+    //
+    // Selection model: in move-mode only ONE element across the slide can be
+    // "active" at a time (selectedDecorIdx OR selectedTextEl). The active
+    // element gets pointer-events:auto + drag handlers + bright outline +
+    // z-index:999 so it's always on top and the only thing that responds to
+    // touches. Non-active elements get pointer-events:none so an accidental
+    // finger crossover during a drag can't grab a different element. Tap an
+    // empty part of the canvas to clear selection — then everything becomes
+    // interactive again (and the next tap selects).
     slideTitle.contentEditable = isMoveMode ? 'false' : 'true';
     slideBody.contentEditable = isMoveMode ? 'false' : 'true';
+    const hasSelection = state.selectedDecorIdx !== null || state.selectedTextEl !== null;
+    const titleIsActive = isMoveMode && (!hasSelection || state.selectedTextEl === 'title');
+    const bodyIsActive = isMoveMode && (!hasSelection || state.selectedTextEl === 'body');
     if (isMoveMode) {
-        // Restore pointer events on title/body so they can be dragged even
-        // though their container has pointer-events:none.
-        slideTitle.style.pointerEvents = 'auto';
-        slideBody.style.pointerEvents = 'auto';
+        slideTitle.style.pointerEvents = titleIsActive ? 'auto' : 'none';
+        slideBody.style.pointerEvents = bodyIsActive ? 'auto' : 'none';
         slideTitle.style.cursor = 'move';
         slideBody.style.cursor = 'move';
-        slideTitle.style.outline = '2px dashed rgba(99, 102, 241, 0.5)';
-        slideBody.style.outline = '2px dashed rgba(99, 102, 241, 0.5)';
-        makeDraggable(slideTitle, {
-            onEnd: (geom) => { slide.titlePos = geom; renderThumbnails(); },
-        });
-        makeDraggable(slideBody, {
-            onEnd: (geom) => { slide.bodyPos = geom; renderThumbnails(); },
-        });
+        // Faded outline for "tap-to-select" hint; bright outline for selected.
+        const titleSelected = state.selectedTextEl === 'title';
+        const bodySelected = state.selectedTextEl === 'body';
+        slideTitle.style.outline = titleSelected
+            ? '2px solid var(--primary, #6366f1)'
+            : '2px dashed rgba(99, 102, 241, 0.35)';
+        slideBody.style.outline = bodySelected
+            ? '2px solid var(--primary, #6366f1)'
+            : '2px dashed rgba(99, 102, 241, 0.35)';
+        if (titleSelected) slideTitle.style.zIndex = '999';
+        else slideTitle.style.zIndex = '';
+        if (bodySelected) slideBody.style.zIndex = '999';
+        else slideBody.style.zIndex = '';
+
+        // Tap title/body → select that text element (clears any decor selection).
+        // Wired to pointerdown (not mousedown) because makeDraggable's
+        // pointerdown calls preventDefault() which cancels the synthesized
+        // mouse event. Both listeners fire on the same pointerdown.
+        slideTitle.onpointerdown = (ev) => {
+            if (state.selectedTextEl !== 'title' || state.selectedDecorIdx !== null) {
+                state.selectedTextEl = 'title';
+                state.selectedDecorIdx = null;
+                syncDecorDetailPanel();
+                // Block siblings synchronously so the drag-in-this-gesture
+                // can't bleed into them, then defer a full re-render until
+                // after pointerup so the drag completes cleanly.
+                slideCanvas.querySelectorAll('.ai-decoration').forEach(n => {
+                    n.style.pointerEvents = 'none';
+                    n.style.zIndex = '1';
+                    n.classList.remove('decor-selected');
+                });
+                slideBody.style.pointerEvents = 'none';
+                slideTitle.style.pointerEvents = 'auto';
+                slideTitle.style.zIndex = '999';
+                slideTitle.style.outline = '2px solid var(--primary, #6366f1)';
+                document.addEventListener('pointerup', () => {
+                    renderSlide();
+                    syncDecorDetailPanel();
+                }, { once: true });
+            }
+        };
+        slideBody.onpointerdown = (ev) => {
+            if (state.selectedTextEl !== 'body' || state.selectedDecorIdx !== null) {
+                state.selectedTextEl = 'body';
+                state.selectedDecorIdx = null;
+                syncDecorDetailPanel();
+                slideCanvas.querySelectorAll('.ai-decoration').forEach(n => {
+                    n.style.pointerEvents = 'none';
+                    n.style.zIndex = '1';
+                    n.classList.remove('decor-selected');
+                });
+                slideTitle.style.pointerEvents = 'none';
+                slideBody.style.pointerEvents = 'auto';
+                slideBody.style.zIndex = '999';
+                slideBody.style.outline = '2px solid var(--primary, #6366f1)';
+                document.addEventListener('pointerup', () => {
+                    renderSlide();
+                    syncDecorDetailPanel();
+                }, { once: true });
+            }
+        };
+
+        if (titleIsActive) {
+            makeDraggable(slideTitle, {
+                onEnd: (geom) => { slide.titlePos = geom; renderThumbnails(); },
+            });
+        } else {
+            unmakeDraggable(slideTitle);
+        }
+        if (bodyIsActive) {
+            makeDraggable(slideBody, {
+                onEnd: (geom) => { slide.bodyPos = geom; renderThumbnails(); },
+            });
+        } else {
+            unmakeDraggable(slideBody);
+        }
     } else {
         unmakeDraggable(slideTitle);
         unmakeDraggable(slideBody);
@@ -2154,6 +2238,10 @@ function renderSlide() {
         slideBody.style.cursor = 'text';
         slideTitle.style.outline = '';
         slideBody.style.outline = '';
+        slideTitle.style.zIndex = '';
+        slideBody.style.zIndex = '';
+        slideTitle.onpointerdown = null;
+        slideBody.onpointerdown = null;
     }
 
     // Photo-bottom layout forces white text
@@ -2174,41 +2262,78 @@ function renderSlide() {
         s.decorations.forEach((deco, i) => {
             const el = document.createElement('div');
             const isSelected = isMoveMode && state.selectedDecorIdx === i;
-            el.className = 'ai-decoration' + (isMoveMode ? ' draggable' : '') + (isSelected ? ' decor-selected' : '');
-            const pe = isMoveMode ? '' : 'pointer-events:none;';
-            el.style.cssText = `position:absolute;z-index:1;${pe}${buildDecorCss(deco)}`;
+            // In move-mode, an element is "active" (full pointer events +
+            // drag handlers) if (a) nothing is selected yet, or (b) it's the
+            // currently selected one. Non-selected siblings get pointer-
+            // events:none so a finger drag can't bleed into them.
+            const decorIsActive = isMoveMode && (!hasSelection || isSelected);
+            el.className = 'ai-decoration' + (decorIsActive ? ' draggable' : '') + (isSelected ? ' decor-selected' : '');
+            const pe = (isMoveMode && decorIsActive) ? '' : 'pointer-events:none;';
+            const z = isSelected ? 999 : 1;
+            el.style.cssText = `position:absolute;z-index:${z};${pe}${buildDecorCss(deco)}`;
             slideCanvas.appendChild(el);
             if (isMoveMode) {
-                // Click to select for the sidebar opacity/outline controls.
-                // Stops propagation so a click on a decor doesn't deselect
-                // through the canvas-level click handler we wire elsewhere.
-                el.addEventListener('mousedown', (ev) => {
-                    state.selectedDecorIdx = i;
-                    syncDecorDetailPanel();
-                    // Mark selected synchronously so the dashed outline appears
-                    // before any drag movement.
-                    slideCanvas.querySelectorAll('.ai-decoration.decor-selected').forEach(n => n.classList.remove('decor-selected'));
-                    el.classList.add('decor-selected');
+                // Click on any decor — selected or not — sets the selection.
+                // We attach this even when pointer-events:none because clicks
+                // are blocked anyway then; on un-selected decors (when nothing
+                // is selected) the first tap picks this one and the same
+                // gesture continues into a drag (makeDraggable below handles
+                // the pointerdown that fired this).
+                el.addEventListener('pointerdown', (ev) => {
+                    if (state.selectedDecorIdx !== i || state.selectedTextEl !== null) {
+                        state.selectedDecorIdx = i;
+                        state.selectedTextEl = null;
+                        syncDecorDetailPanel();
+                        // Apply selection visuals synchronously WITHOUT a
+                        // full re-render — otherwise we'd replace `el` mid-
+                        // gesture and the drag-start that's about to fire on
+                        // the same pointerdown would be lost. Defer the
+                        // re-render until pointerup so resize handles + the
+                        // proper draggable state come back cleanly.
+                        slideCanvas.querySelectorAll('.ai-decoration').forEach(n => {
+                            if (n !== el) {
+                                n.style.pointerEvents = 'none';
+                                n.style.zIndex = '1';
+                                n.classList.remove('decor-selected');
+                            }
+                        });
+                        slideTitle.style.pointerEvents = 'none';
+                        slideBody.style.pointerEvents = 'none';
+                        el.classList.add('decor-selected');
+                        el.style.zIndex = '999';
+                        el.style.pointerEvents = 'auto';
+                        document.addEventListener('pointerup', () => {
+                            renderSlide();
+                            syncDecorDetailPanel();
+                        }, { once: true });
+                    }
                     ev.stopPropagation();
                 });
-                makeDraggable(el, {
-                    onEnd: (geom) => {
-                        state.settings.decorations[i].css = overrideCssGeom(
-                            state.settings.decorations[i].css, geom
-                        );
-                        if (i === slotIdx && s.slotPhotoSrc) renderSlide();
-                        renderThumbnails();
-                    },
-                });
-                makeResizable(el, {
-                    onEnd: (geom) => {
-                        state.settings.decorations[i].css = overrideCssGeom(
-                            state.settings.decorations[i].css, geom
-                        );
-                        if (i === slotIdx && s.slotPhotoSrc) renderSlide();
-                        renderThumbnails();
-                    },
-                });
+                if (decorIsActive) {
+                    makeDraggable(el, {
+                        onEnd: (geom) => {
+                            state.settings.decorations[i].css = overrideCssGeom(
+                                state.settings.decorations[i].css, geom
+                            );
+                            if (i === slotIdx && s.slotPhotoSrc) renderSlide();
+                            renderThumbnails();
+                        },
+                    });
+                    // Only the SELECTED decor gets resize handles — otherwise
+                    // every overlapping decor would show its own 4 corner
+                    // handles and the canvas becomes a hit-test mess.
+                    if (isSelected) {
+                        makeResizable(el, {
+                            onEnd: (geom) => {
+                                state.settings.decorations[i].css = overrideCssGeom(
+                                    state.settings.decorations[i].css, geom
+                                );
+                                if (i === slotIdx && s.slotPhotoSrc) renderSlide();
+                                renderThumbnails();
+                            },
+                        });
+                    }
+                }
             }
             // If this is the photo slot and user uploaded a slot photo, render the photo on top
             if (i === slotIdx && s.slotPhotoSrc) {
@@ -2227,27 +2352,58 @@ function renderSlide() {
     if (existingCardOvl) existingCardOvl.remove();
     if (s.cardOverlay && s.cardOverlay.enabled) {
         const cardEl = document.createElement('div');
-        cardEl.className = 'ai-card-overlay ai-decoration' + (isMoveMode ? ' draggable' : '');
-        const cardPe = isMoveMode ? '' : 'pointer-events:none;';
-        cardEl.style.cssText = `position:absolute;z-index:1;${cardPe}${s.cardOverlay.css}`;
+        const cardSelected = state.selectedTextEl === 'card';
+        const cardActive = isMoveMode && (!hasSelection || cardSelected);
+        cardEl.className = 'ai-card-overlay ai-decoration' + (cardActive ? ' draggable' : '') + (cardSelected ? ' decor-selected' : '');
+        const cardPe = (isMoveMode && cardActive) ? '' : 'pointer-events:none;';
+        const cardZ = cardSelected ? 999 : 1;
+        cardEl.style.cssText = `position:absolute;z-index:${cardZ};${cardPe}${s.cardOverlay.css}`;
         slideCanvas.insertBefore(cardEl, contentArea);
         if (isMoveMode) {
-            makeDraggable(cardEl, {
-                onEnd: (geom) => {
-                    state.settings.cardOverlay.css = overrideCssGeom(
-                        state.settings.cardOverlay.css, geom
-                    );
-                    renderThumbnails();
-                },
+            cardEl.addEventListener('pointerdown', (ev) => {
+                if (state.selectedTextEl !== 'card' || state.selectedDecorIdx !== null) {
+                    state.selectedTextEl = 'card';
+                    state.selectedDecorIdx = null;
+                    syncDecorDetailPanel();
+                    slideCanvas.querySelectorAll('.ai-decoration').forEach(n => {
+                        if (n !== cardEl) {
+                            n.style.pointerEvents = 'none';
+                            n.style.zIndex = '1';
+                            n.classList.remove('decor-selected');
+                        }
+                    });
+                    slideTitle.style.pointerEvents = 'none';
+                    slideBody.style.pointerEvents = 'none';
+                    cardEl.style.pointerEvents = 'auto';
+                    cardEl.style.zIndex = '999';
+                    cardEl.classList.add('decor-selected');
+                    document.addEventListener('pointerup', () => {
+                        renderSlide();
+                        syncDecorDetailPanel();
+                    }, { once: true });
+                }
+                ev.stopPropagation();
             });
-            makeResizable(cardEl, {
-                onEnd: (geom) => {
-                    state.settings.cardOverlay.css = overrideCssGeom(
-                        state.settings.cardOverlay.css, geom
-                    );
-                    renderThumbnails();
-                },
-            });
+            if (cardActive) {
+                makeDraggable(cardEl, {
+                    onEnd: (geom) => {
+                        state.settings.cardOverlay.css = overrideCssGeom(
+                            state.settings.cardOverlay.css, geom
+                        );
+                        renderThumbnails();
+                    },
+                });
+                if (cardSelected) {
+                    makeResizable(cardEl, {
+                        onEnd: (geom) => {
+                            state.settings.cardOverlay.css = overrideCssGeom(
+                                state.settings.cardOverlay.css, geom
+                            );
+                            renderThumbnails();
+                        },
+                    });
+                }
+            }
         }
     }
 
@@ -3235,6 +3391,7 @@ function snapshotEditState() {
         selectedLayout: deepClone(state.selectedLayout),
         selectedBg: deepClone(state.selectedBg),
         selectedDecorIdx: state.selectedDecorIdx,
+        selectedTextEl: state.selectedTextEl,
     };
 }
 
@@ -3289,6 +3446,7 @@ function undoLastEdit() {
     state.selectedLayout = s.selectedLayout;
     state.selectedBg = s.selectedBg;
     state.selectedDecorIdx = s.selectedDecorIdx;
+    state.selectedTextEl = s.selectedTextEl != null ? s.selectedTextEl : null;
     renderSlide();
     renderThumbnails();
     if (typeof syncDecorDetailPanel === 'function') syncDecorDetailPanel();

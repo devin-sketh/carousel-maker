@@ -1474,8 +1474,18 @@ body {
 
 /* Selection ring on the currently-edited decoration (in move mode) */
 .ai-decoration.decor-selected {
-    outline: 2px dashed #6366f1;
+    outline: 3px solid #6366f1 !important;
     outline-offset: 2px;
+    box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.5),
+                0 6px 24px rgba(99, 102, 241, 0.35);
+}
+/* In move mode the unselected decorations get a faint hint outline so the
+ * user can still see them and tap to select. Their pointer events are off
+ * (set inline) so a drag of the selected element can't accidentally land
+ * on one of these. */
+.ai-decoration.draggable:not(.decor-selected) {
+    outline: 1px dashed rgba(99, 102, 241, 0.35);
+    outline-offset: -1px;
 }
 
 /* AI undo / history buttons */
