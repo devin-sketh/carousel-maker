@@ -631,8 +631,89 @@ body {
 }
 .btn-reset-colors:hover { border-color: var(--primary); color: var(--primary); }
 
+/* Per-slide banner — explains scope of style changes + offers a one-tap
+ * broadcast button to copy the current slide's style onto every other slide. */
+.per-slide-banner {
+    display: flex; flex-direction: column; gap: 8px;
+    padding: 12px 14px;
+    background: linear-gradient(135deg, #eef2ff 0%, #e0e7ff 100%);
+    border: 1.5px solid #6366f1;
+    border-radius: var(--radius);
+}
+.per-slide-banner .per-slide-banner-text {
+    font-size: 0.78rem; color: #312e81; line-height: 1.4;
+    font-family: 'Inter', sans-serif;
+}
+.per-slide-banner .per-slide-banner-text b {
+    color: #4338ca; font-weight: 700;
+}
+.btn-apply-to-all {
+    display: flex; align-items: center; justify-content: center; gap: 8px;
+    padding: 9px 14px;
+    background: #6366f1; color: #fff; border: none;
+    border-radius: var(--radius-sm);
+    font-size: 0.85rem; font-weight: 600; cursor: pointer;
+    font-family: 'Inter', sans-serif;
+    transition: all var(--transition);
+}
+.btn-apply-to-all:hover {
+    background: #4f46e5; transform: translateY(-1px);
+    box-shadow: 0 4px 12px rgba(99,102,241,0.3);
+}
+
 /* Highlight controls */
 .highlight-controls { display: flex; flex-direction: column; gap: 8px; }
+
+/* Selection preview bar — shows the text the user manually highlighted on
+ * the slide canvas, even after focus moved to the Style sheet. */
+.selection-preview-bar {
+    display: none;
+    align-items: center; gap: 8px;
+    padding: 8px 10px;
+    background: linear-gradient(135deg, #fff7d6 0%, #fde68a 100%);
+    border: 1.5px solid #FBBF24;
+    border-radius: var(--radius-sm);
+    box-shadow: 0 2px 8px rgba(251,191,36,0.2);
+}
+.selection-preview-bar.has-selection { display: flex; }
+.selection-preview-bar .sel-preview-label {
+    font-size: 0.7rem; font-weight: 700; color: #92400E;
+    text-transform: uppercase; letter-spacing: 0.04em;
+    flex-shrink: 0;
+}
+.selection-preview-bar .sel-preview-text {
+    flex: 1; min-width: 0;
+    font-size: 0.88rem; font-weight: 600; color: #1a1a2e;
+    background: rgba(255,255,255,0.7);
+    padding: 4px 8px; border-radius: 4px;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    font-family: 'Inter', sans-serif;
+}
+.selection-preview-bar .sel-preview-apply {
+    flex-shrink: 0;
+    padding: 6px 12px;
+    background: #f59e0b; color: #fff; border: none;
+    border-radius: var(--radius-sm);
+    font-size: 0.82rem; font-weight: 700; cursor: pointer;
+    font-family: 'Inter', sans-serif;
+    transition: all var(--transition);
+}
+.selection-preview-bar .sel-preview-apply:hover {
+    background: #d97706; transform: translateY(-1px);
+}
+.manual-highlight-hint {
+    display: block;
+    font-size: 0.75rem; color: var(--text-muted, #6b7280);
+    line-height: 1.4; padding: 6px 10px;
+    background: #f9fafb;
+    border: 1px dashed #d1d5db;
+    border-radius: var(--radius-sm);
+    font-family: 'Inter', sans-serif;
+}
+.selection-preview-bar.has-selection + .manual-highlight-hint {
+    display: none;
+}
+
 .highlight-row {
     display: flex; align-items: center; gap: 8px;
 }

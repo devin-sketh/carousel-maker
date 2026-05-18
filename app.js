@@ -2000,9 +2000,126 @@ function buildOverlayCss(s, layout, effectivePos) {
     }
 }
 
+/* ===================== PER-SLIDE STYLE & BG =====================
+ * Each slide can now own its own style overrides (fonts, sizes, alignment,
+ * highlight color/style, overlay) and background. state.settings and
+ * state.selectedBg behave as a "live view" of whatever slide the user is
+ * currently editing — every renderSlide() flushes the live view into the
+ * slide on the way out, and loads the next slide's overrides on the way in
+ * (only when the active slide actually changed, to avoid clobbering an
+ * in-progress slider drag that triggers a re-render). "Применить ко всем"
+ * copies the current slide's overrides + bg onto every other slide.
+ */
+const PER_SLIDE_STYLE_KEYS = [
+    'titleFont', 'bodyFont', 'fontSize', 'titleSize',
+    'align', 'textPosition',
+    'highlightColor', 'highlightStyle',
+    'overlayOpacity', 'overlayMode', 'overlayDirection',
+    'bgBlur',
+];
+let _lastRenderedSlideIdx = -1;
+
+function loadCurrentSlideStyleAndBg() {
+    const slide = state.slides[state.currentSlide];
+    if (!slide) return;
+    if (slide.style) {
+        PER_SLIDE_STYLE_KEYS.forEach(k => {
+            if (slide.style[k] !== undefined) state.settings[k] = slide.style[k];
+        });
+    }
+    if (slide.bg) {
+        state.selectedBg = deepClone(slide.bg);
+    }
+}
+
+function persistStyleToCurrentSlide() {
+    const slide = state.slides[state.currentSlide];
+    if (!slide) return;
+    if (!slide.style) slide.style = {};
+    PER_SLIDE_STYLE_KEYS.forEach(k => {
+        if (state.settings[k] !== undefined) slide.style[k] = state.settings[k];
+    });
+    if (state.selectedBg) {
+        slide.bg = deepClone(state.selectedBg);
+    }
+}
+
+function syncStyleControlsToSettings() {
+    // Sync sidebar UI controls so they reflect the freshly-loaded slide style.
+    const s = state.settings;
+    if (titleFontSelect && s.titleFont) titleFontSelect.value = s.titleFont;
+    if (bodyFontSelect && s.bodyFont) bodyFontSelect.value = s.bodyFont;
+    if (fontSizeRange) {
+        fontSizeRange.value = s.fontSize;
+        if (fontSizeVal) fontSizeVal.textContent = s.fontSize;
+    }
+    if (titleSizeRange) {
+        titleSizeRange.value = s.titleSize;
+        if (titleSizeVal) titleSizeVal.textContent = s.titleSize;
+    }
+    document.querySelectorAll('.align-btn').forEach(b => {
+        b.classList.toggle('active', b.dataset.align === (s.align || 'center'));
+    });
+    document.querySelectorAll('.text-pos-btn').forEach(b => {
+        b.classList.toggle('active', b.dataset.position === s.textPosition);
+    });
+    const hl = document.getElementById('highlight-color');
+    if (hl && s.highlightColor) hl.value = s.highlightColor;
+    document.querySelectorAll('.highlight-style-chip').forEach(c => {
+        c.classList.toggle('active', c.dataset.style === (s.highlightStyle || 'marker'));
+    });
+    if (bgOverlayRange) {
+        bgOverlayRange.value = s.overlayOpacity;
+        if (bgOverlayVal) bgOverlayVal.textContent = s.overlayOpacity + '%';
+    }
+    if (bgBlurRange) {
+        bgBlurRange.value = s.bgBlur || 0;
+        if (bgBlurVal) bgBlurVal.textContent = s.bgBlur || 0;
+    }
+    document.querySelectorAll('.overlay-mode-btn').forEach(b => {
+        b.classList.toggle('active', b.dataset.mode === s.overlayMode);
+    });
+    document.querySelectorAll('.overlay-dir-btn').forEach(b => {
+        b.classList.toggle('active', b.dataset.dir === s.overlayDirection);
+    });
+    // Show/hide photo controls based on whether the current slide has a photo bg.
+    if (photoControls) {
+        photoControls.style.display = (state.selectedBg && state.selectedBg.type === 'photo') ? 'flex' : 'none';
+    }
+}
+
+function applyCurrentStyleToAllSlides() {
+    if (!state.slides.length) return;
+    if (typeof pushEditHistory === 'function') pushEditHistory('До «Применить ко всем»');
+    // Flush the live view into the current slide before broadcasting.
+    persistStyleToCurrentSlide();
+    const cur = state.slides[state.currentSlide];
+    if (!cur) return;
+    const styleSnap = cur.style ? { ...cur.style } : {};
+    const bgSnap = cur.bg ? deepClone(cur.bg) : null;
+    state.slides.forEach((s, i) => {
+        if (i === state.currentSlide) return;
+        s.style = { ...styleSnap };
+        if (bgSnap) s.bg = deepClone(bgSnap);
+    });
+    renderSlide();
+    renderThumbnails();
+    showToast('Стиль применён ко всем слайдам');
+}
+
 /* ===================== RENDER SLIDE ===================== */
 function renderSlide() {
     if (!state.slides.length) return;
+
+    // On slide change, pull that slide's style overrides into the live view.
+    // Skip the reload while editing the same slide — otherwise every slider
+    // input would snap back to the previously-saved value before the new one
+    // is applied.
+    if (state.currentSlide !== _lastRenderedSlideIdx) {
+        loadCurrentSlideStyleAndBg();
+        _lastRenderedSlideIdx = state.currentSlide;
+        syncStyleControlsToSettings();
+    }
 
     const slide = state.slides[state.currentSlide];
     const s = state.settings;
@@ -2455,6 +2572,12 @@ function renderSlide() {
         editTitleInput.value = slide.title || '';
         editBodyInput.value = slide.body || '';
     }
+
+    // Capture the just-rendered style + bg as this slide's persistent override
+    // so that navigating away and back restores it. Runs every frame so any
+    // setter that mutated state.settings (slider, font picker, color, etc.)
+    // automatically sticks to this slide and only this slide.
+    persistStyleToCurrentSlide();
 }
 
 /* ===================== DECORATIONS ===================== */
@@ -2857,22 +2980,120 @@ function escapeHtml(text) {
     return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
 
-function applyHighlight() {
+/* ===================== TEXT SELECTION PERSISTENCE =====================
+ * The user often selects text in the slide canvas, then taps a different
+ * tab/sheet (Стиль) to apply a highlight. Tapping anywhere outside the
+ * contentEditable collapses the live DOM selection. We mirror every valid
+ * selection into editorSelection so the highlight controls still know what
+ * the user picked even after the selection visually disappears.
+ */
+const editorSelection = {
+    range: null,
+    text: '',
+    target: null,    // 'title' | 'body'
+    slideIdx: -1,
+};
+
+function captureEditorSelection() {
     const sel = window.getSelection();
-    if (!sel || sel.rangeCount === 0 || sel.isCollapsed) {
+    if (!sel || sel.rangeCount === 0) return;
+    const r = sel.getRangeAt(0);
+    if (r.collapsed) return;
+    const inTitle = slideTitle && slideTitle.contains(r.commonAncestorContainer);
+    const inBody = slideBody && slideBody.contains(r.commonAncestorContainer);
+    if (!inTitle && !inBody) return;
+    editorSelection.range = r.cloneRange();
+    editorSelection.text = (r.toString() || '').trim();
+    editorSelection.target = inTitle ? 'title' : 'body';
+    editorSelection.slideIdx = state.currentSlide;
+    updateSelectionPreviewBar();
+}
+
+function clearEditorSelection() {
+    editorSelection.range = null;
+    editorSelection.text = '';
+    editorSelection.target = null;
+    editorSelection.slideIdx = -1;
+    updateSelectionPreviewBar();
+}
+
+function hasValidEditorSelection() {
+    if (!editorSelection.range) return false;
+    if (editorSelection.slideIdx !== state.currentSlide) return false;
+    const host = editorSelection.target === 'title' ? slideTitle : slideBody;
+    if (!host) return false;
+    // Range must still point into the live DOM of the host element.
+    try {
+        const c = editorSelection.range.commonAncestorContainer;
+        return host.contains(c);
+    } catch (e) {
+        return false;
+    }
+}
+
+function restoreEditorSelectionToDom() {
+    if (!hasValidEditorSelection()) return null;
+    const sel = window.getSelection();
+    if (!sel) return null;
+    sel.removeAllRanges();
+    try {
+        sel.addRange(editorSelection.range);
+        return sel.getRangeAt(0);
+    } catch (e) {
+        return null;
+    }
+}
+
+function updateSelectionPreviewBar() {
+    const bar = document.getElementById('selection-preview-bar');
+    if (!bar) return;
+    const has = hasValidEditorSelection();
+    bar.classList.toggle('has-selection', has);
+    if (has) {
+        const preview = bar.querySelector('.sel-preview-text');
+        if (preview) {
+            const t = editorSelection.text || '';
+            preview.textContent = t.length > 60 ? t.slice(0, 57) + '…' : t;
+        }
+    }
+}
+
+// Capture every user selection inside slideTitle / slideBody. Use both
+// selectionchange (catches keyboard + touch) and pointerup as a fallback.
+document.addEventListener('selectionchange', () => {
+    captureEditorSelection();
+});
+
+function applyHighlight() {
+    // Prefer the live selection if user still has one, otherwise fall back to
+    // the saved Range (which survives tab/sheet switches that steal focus).
+    const sel = window.getSelection();
+    let range = null;
+    let isInTitle = false;
+    let isInBody = false;
+
+    if (sel && sel.rangeCount > 0 && !sel.isCollapsed) {
+        const r = sel.getRangeAt(0);
+        if (slideTitle.contains(r.commonAncestorContainer) || slideBody.contains(r.commonAncestorContainer)) {
+            range = r;
+        }
+    }
+    if (!range && hasValidEditorSelection()) {
+        range = restoreEditorSelectionToDom();
+    }
+    if (!range || range.collapsed) {
         showToast('Сначала выделите текст в заголовке или описании');
         return;
     }
-
-    const range = sel.getRangeAt(0);
-    const container = range.commonAncestorContainer;
-    const isInTitle = slideTitle.contains(container);
-    const isInBody = slideBody.contains(container);
+    isInTitle = slideTitle.contains(range.commonAncestorContainer);
+    isInBody = slideBody.contains(range.commonAncestorContainer);
 
     if (!isInTitle && !isInBody) {
         showToast('Выделите текст на слайде');
         return;
     }
+
+    if (typeof pushEditHistory === 'function') pushEditHistory('До выделения текста');
 
     const color = state.settings.highlightColor;
     const styleId = state.settings.highlightStyle || 'marker';
@@ -2888,7 +3109,8 @@ function applyHighlight() {
         range.insertNode(mark);
     }
 
-    sel.removeAllRanges();
+    if (sel) sel.removeAllRanges();
+    clearEditorSelection();
 
     // Save the highlighted HTML back to state
     const slide = state.slides[state.currentSlide];
@@ -3447,6 +3669,8 @@ function undoLastEdit() {
     state.selectedBg = s.selectedBg;
     state.selectedDecorIdx = s.selectedDecorIdx;
     state.selectedTextEl = s.selectedTextEl != null ? s.selectedTextEl : null;
+    // Force renderSlide to reload per-slide style from the restored slide.
+    _lastRenderedSlideIdx = -1;
     renderSlide();
     renderThumbnails();
     if (typeof syncDecorDetailPanel === 'function') syncDecorDetailPanel();
@@ -3503,6 +3727,7 @@ function restoreAiHistory(idx) {
     pushAiHistory('Текущая редакция');
     state.slides = cloneSlidesForHistory(snapshot.slides);
     if (state.currentSlide >= state.slides.length) state.currentSlide = 0;
+    _lastRenderedSlideIdx = -1;
     renderSlide();
     renderThumbnails();
     showToast(`Возвращено: ${snapshot.label}`);
@@ -3515,6 +3740,7 @@ function undoLastAiMutation() {
     const snapshot = state.aiHistory.pop();
     state.slides = cloneSlidesForHistory(snapshot.slides);
     if (state.currentSlide >= state.slides.length) state.currentSlide = 0;
+    _lastRenderedSlideIdx = -1;
     renderSlide();
     renderThumbnails();
     showToast(`Откат: ${snapshot.label}`);
@@ -4119,6 +4345,20 @@ function init() {
     const highlightColorInput = $('#highlight-color');
     const btnClearHighlight = $('#btn-clear-highlight');
     const btnAiHighlight = $('#btn-ai-highlight');
+    const selPreviewApply = $('#sel-preview-apply');
+
+    // Prevent style controls from stealing focus from the contentEditable slide
+    // text — this keeps the live DOM selection intact while the user reaches
+    // for the chip/button. (mousedown fires before focus moves.) Touch is
+    // handled separately by the saved Range fallback.
+    const preserveFocusOnPointerDown = (el) => {
+        if (!el) return;
+        el.addEventListener('mousedown', (ev) => {
+            // Color picker needs default behaviour to open the native picker.
+            if (el.tagName === 'INPUT' && el.type === 'color') return;
+            ev.preventDefault();
+        });
+    };
 
     if (btnAiHighlight) {
         btnAiHighlight.addEventListener('click', () => {
@@ -4127,7 +4367,15 @@ function init() {
         });
     }
     if (btnHighlight) {
+        preserveFocusOnPointerDown(btnHighlight);
         btnHighlight.addEventListener('click', (e) => {
+            e.preventDefault();
+            applyHighlight();
+        });
+    }
+    if (selPreviewApply) {
+        preserveFocusOnPointerDown(selPreviewApply);
+        selPreviewApply.addEventListener('click', (e) => {
             e.preventDefault();
             applyHighlight();
         });
@@ -4143,16 +4391,28 @@ function init() {
     }
 
     // Highlight style chips — switch between marker / pill / underline / glow / accent.
+    // If the user has a saved text selection, clicking a chip ALSO applies that
+    // style as a new highlight to the saved selection (one tap = pick style +
+    // highlight). Otherwise it only changes the style for future highlights
+    // and restyles existing ones.
     const styleChipsContainer = $('#highlight-styles');
     if (styleChipsContainer) {
         styleChipsContainer.querySelectorAll('.highlight-style-chip').forEach(chip => {
             chip.classList.toggle('active', chip.dataset.style === (state.settings.highlightStyle || 'marker'));
+            preserveFocusOnPointerDown(chip);
             chip.addEventListener('click', () => {
+                const hadSelection = hasValidEditorSelection();
                 if (typeof pushEditHistory === 'function') pushEditHistory('До смены стиля выделения');
                 state.settings.highlightStyle = chip.dataset.style;
                 styleChipsContainer.querySelectorAll('.highlight-style-chip').forEach(c => c.classList.remove('active'));
                 chip.classList.add('active');
                 restyleAllHighlights();
+                if (hadSelection) {
+                    // Apply the just-picked style to whatever the user had
+                    // selected on the canvas — saves them a second tap on
+                    // "Применить".
+                    applyHighlight();
+                }
             });
         });
     }
@@ -4178,6 +4438,15 @@ function init() {
             btnUploadCard.classList.remove('active');
             if (templateSection) templateSection.style.display = 'none';
             if (manualSection) manualSection.style.display = 'block';
+        });
+    }
+
+    // "Применить ко всем" — broadcast current slide's style + bg to every
+    // other slide.
+    const btnApplyStyleToAll = $('#btn-apply-style-to-all');
+    if (btnApplyStyleToAll) {
+        btnApplyStyleToAll.addEventListener('click', () => {
+            applyCurrentStyleToAllSlides();
         });
     }
 

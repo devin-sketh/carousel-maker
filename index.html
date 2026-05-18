@@ -284,6 +284,21 @@
             <div class="editor-layout">
                 <!-- Sidebar -->
                 <aside class="editor-sidebar">
+                    <div class="sidebar-section per-slide-banner" data-mtab="style">
+                        <div class="per-slide-banner-text">
+                            Изменения стиля применяются <b>только к текущему слайду</b>
+                        </div>
+                        <button class="btn-apply-to-all" id="btn-apply-style-to-all" type="button">
+                            <svg width="14" height="14" viewBox="0 0 16 16" fill="none">
+                                <rect x="2" y="2" width="5" height="5" rx="1" stroke="currentColor" stroke-width="1.5"/>
+                                <rect x="9" y="2" width="5" height="5" rx="1" stroke="currentColor" stroke-width="1.5"/>
+                                <rect x="2" y="9" width="5" height="5" rx="1" stroke="currentColor" stroke-width="1.5"/>
+                                <rect x="9" y="9" width="5" height="5" rx="1" fill="currentColor" stroke="currentColor" stroke-width="1.5"/>
+                            </svg>
+                            Применить ко всем слайдам
+                        </button>
+                    </div>
+
                     <div class="sidebar-section">
                         <h3>Формат</h3>
                         <div class="format-options">
@@ -364,6 +379,14 @@
                     <div class="sidebar-section">
                         <h3>Выделение текста</h3>
                         <div class="highlight-controls">
+                            <div id="selection-preview-bar" class="selection-preview-bar" aria-live="polite">
+                                <div class="sel-preview-label">Будет выделено</div>
+                                <div class="sel-preview-text">—</div>
+                                <button type="button" class="sel-preview-apply" id="sel-preview-apply">Применить</button>
+                            </div>
+                            <div class="manual-highlight-hint" id="manual-highlight-hint">
+                                Выделите слово в слайде (двойной тап) → нажмите «Применить»
+                            </div>
                             <button class="btn-ai-highlight" id="btn-ai-highlight" title="AI автоматически выделит ключевые слова">
                                 <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M8 1l1.5 3.5L13 6l-3.5 1.5L8 11 6.5 7.5 3 6l3.5-1.5L8 1z" fill="#7c3aed" opacity="0.7"/></svg>
                                 AI выделение
