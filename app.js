@@ -3123,6 +3123,7 @@ function applyHighlight() {
     }
 
     if (typeof pushEditHistory === 'function') pushEditHistory('До выделения текста');
+    if (typeof pushHighlightHistory === 'function') pushHighlightHistory('Выделение фрагмента');
 
     const color = state.settings.highlightColor;
     const styleId = state.settings.highlightStyle || 'marker';
@@ -3157,12 +3158,14 @@ function applyHighlight() {
 }
 
 function clearHighlights() {
+    if (typeof pushHighlightHistory === 'function') pushHighlightHistory('Очистка всех выделений');
     state.slides.forEach(slide => {
         slide.titleHtml = null;
         slide.bodyHtml = null;
     });
     renderSlide();
     renderThumbnails();
+    if (typeof syncEditMirrors === 'function') syncEditMirrors();
     showToast('Выделение убрано');
 }
 
@@ -3172,6 +3175,7 @@ function autoHighlightAllSlides(opts = {}) {
         // Snapshot before re-highlighting so the user can roll back to the
         // previous highlight set (or none at all).
         pushAiHistory('До AI-выделения');
+        if (typeof pushHighlightHistory === 'function') pushHighlightHistory('AI-выделение');
     }
     const color = state.settings.highlightColor;
     const styleId = state.settings.highlightStyle || 'marker';
@@ -3189,7 +3193,16 @@ function autoHighlightAllSlides(opts = {}) {
     });
     renderSlide();
     renderThumbnails();
-    showToast(highlightedCount > 0 ? 'AI выделил ключевые фразы!' : 'Заголовки слишком короткие для выделения');
+    if (typeof syncEditMirrors === 'function') syncEditMirrors();
+    if (highlightedCount > 0) {
+        // Surface the chosen style/color so the user can immediately tell
+        // whether AI used the variant they expected — and switch chips to
+        // restyle the result in place if not.
+        const styleName = (HIGHLIGHT_STYLES[styleId] || HIGHLIGHT_STYLES.marker).name;
+        showToast('AI выделил ключевые фразы в стиле «' + styleName + '»');
+    } else {
+        showToast('Заголовки слишком короткие для выделения');
+    }
 }
 
 /**
@@ -3718,6 +3731,61 @@ function updateUndoUi() {
     if (cnt) cnt.textContent = n > 0 ? String(n) : '';
 }
 
+/* ===================== HIGHLIGHT HISTORY =====================
+ * A focused undo stack just for highlight operations (applyHighlight,
+ * autoHighlightAllSlides, _toggleMarkAtPoint, clearHighlights). Drives
+ * the «Назад» button next to the highlight controls so the user can step
+ * back through their highlights one by one without disturbing the global
+ * editHistory or AI history. Snapshots only the per-slide title/body HTML
+ * since highlights are purely an HTML-string mutation.
+ */
+const HIGHLIGHT_HISTORY_LIMIT = 50;
+function pushHighlightHistory(label) {
+    if (!state.highlightHistory) state.highlightHistory = [];
+    state.highlightHistory.push({
+        label: label || 'Выделение',
+        slides: state.slides.map(s => ({
+            titleHtml: s.titleHtml || null,
+            bodyHtml: s.bodyHtml || null,
+            title: s.title,
+            body: s.body,
+        })),
+    });
+    if (state.highlightHistory.length > HIGHLIGHT_HISTORY_LIMIT) {
+        state.highlightHistory.splice(0, state.highlightHistory.length - HIGHLIGHT_HISTORY_LIMIT);
+    }
+    updateHighlightUndoUi();
+}
+
+function undoLastHighlight() {
+    if (!state.highlightHistory || state.highlightHistory.length === 0) return;
+    const entry = state.highlightHistory.pop();
+    entry.slides.forEach((snap, i) => {
+        if (!state.slides[i]) return;
+        state.slides[i].titleHtml = snap.titleHtml;
+        state.slides[i].bodyHtml = snap.bodyHtml;
+        // Keep .title/.body in sync when present in the snapshot so an
+        // undone _toggleMarkAtPoint also rolls back any innerText drift.
+        if (snap.title != null) state.slides[i].title = snap.title;
+        if (snap.body != null) state.slides[i].body = snap.body;
+    });
+    renderSlide();
+    renderThumbnails();
+    if (typeof syncEditMirrors === 'function') syncEditMirrors();
+    updateHighlightUndoUi();
+    showToast('Отменил: ' + entry.label);
+}
+
+function updateHighlightUndoUi() {
+    const btn = document.getElementById('btn-undo-highlight');
+    if (!btn) return;
+    const n = state.highlightHistory ? state.highlightHistory.length : 0;
+    btn.disabled = n === 0;
+    btn.title = n > 0
+        ? 'Отменить последнее выделение (' + n + ')'
+        : 'Нет действий для отмены';
+}
+
 /* ===================== AI HISTORY =====================
  * Every AI mutation (split, format, auto-highlight) snapshots the
  * pre-mutation state.slides into state.aiHistory so the user can roll
@@ -4011,6 +4079,39 @@ function showTextActionPopover(targetKey, clientX, clientY, anchorEl) {
     });
 }
 
+/**
+ * If the point (clientX, clientY) inside hostEl lands on an existing <mark>
+ * element (or its descendant text), unwrap that mark and persist the change.
+ * Returns 'removed' if a mark was unwrapped, null otherwise. Used by the
+ * popover «Маркер» action to toggle a word's highlight on the second tap.
+ */
+function _toggleMarkAtPoint(clientX, clientY, hostEl) {
+    const target = document.elementFromPoint(clientX, clientY);
+    if (!target) return null;
+    const markEl = target.closest && target.closest('mark');
+    if (!markEl || !hostEl.contains(markEl)) return null;
+    if (typeof pushEditHistory === 'function') pushEditHistory('До снятия выделения');
+    if (typeof pushHighlightHistory === 'function') pushHighlightHistory('Снятие выделения со слова');
+    // Replace the <mark>...</mark> with its inner contents in place.
+    const parent = markEl.parentNode;
+    while (markEl.firstChild) parent.insertBefore(markEl.firstChild, markEl);
+    parent.removeChild(markEl);
+    parent.normalize();
+    const slide = state.slides[state.currentSlide];
+    if (slide) {
+        if (slideTitle.contains(parent) || parent === slideTitle) {
+            slide.titleHtml = slideTitle.querySelector('mark') ? slideTitle.innerHTML : null;
+            slide.title = slideTitle.innerText;
+        } else if (slideBody.contains(parent) || parent === slideBody) {
+            slide.bodyHtml = slideBody.querySelector('mark') ? slideBody.innerHTML : null;
+            slide.body = slideBody.innerText;
+        }
+    }
+    renderThumbnails();
+    if (typeof syncEditMirrors === 'function') syncEditMirrors();
+    return 'removed';
+}
+
 function _selectWordAtPoint(clientX, clientY, hostEl) {
     // Build a Range at the caret position under (x, y) and expand to the
     // word boundary on each side. Used by the "Выбрать" popover action.
@@ -4126,6 +4227,29 @@ function handleTextAction(action, target, hostEl, clickX, clickY) {
         const ok = _selectWordAtPoint(clickX, clickY, hostEl);
         if (!ok) showToast('Не удалось выделить слово — попробуйте двойной клик');
         else showToast('Слово выделено — нажмите «Применить» в панели «Выделение»');
+    } else if (action === 'mark') {
+        // One-tap marker: highlight the single word under the cursor (or remove
+        // an existing <mark> if the user tapped one). Uses the currently-
+        // selected style+color from the sidebar.
+        if (state.settings && state.settings.moveMode) {
+            state.settings.moveMode = false;
+            renderSlide();
+        }
+        hostEl.contentEditable = 'true';
+        hostEl.focus();
+        const removed = _toggleMarkAtPoint(clickX, clickY, hostEl);
+        if (removed === 'removed') {
+            showToast('Выделение снято');
+            return;
+        }
+        const ok = _selectWordAtPoint(clickX, clickY, hostEl);
+        if (!ok) {
+            showToast('Не удалось выделить слово');
+            return;
+        }
+        applyHighlight();
+        const styleName = (HIGHLIGHT_STYLES[state.settings.highlightStyle || 'marker'] || HIGHLIGHT_STYLES.marker).name;
+        showToast('Слово выделено в стиле «' + styleName + '»');
     } else if (action === 'move') {
         // Switch to move-mode with this text element selected so it's the
         // only thing draggable. Existing render logic gives it pointer-
@@ -4764,6 +4888,15 @@ function init() {
     if (btnClearHighlight) {
         btnClearHighlight.addEventListener('click', clearHighlights);
     }
+    const btnUndoHighlight = $('#btn-undo-highlight');
+    if (btnUndoHighlight) {
+        btnUndoHighlight.addEventListener('click', (e) => {
+            e.preventDefault();
+            undoLastHighlight();
+        });
+    }
+    // Initial UI sync so the button starts disabled.
+    updateHighlightUndoUi();
 
     // Highlight style chips — switch between marker / pill / underline / glow / accent.
     // If the user has a saved text selection, clicking a chip ALSO applies that
@@ -4777,7 +4910,17 @@ function init() {
             preserveFocusOnPointerDown(chip);
             chip.addEventListener('click', () => {
                 const hadSelection = hasValidEditorSelection();
+                const hasAnyMark = state.slides.some(s =>
+                    (s.titleHtml && s.titleHtml.includes('<mark')) ||
+                    (s.bodyHtml && s.bodyHtml.includes('<mark'))
+                );
                 if (typeof pushEditHistory === 'function') pushEditHistory('До смены стиля выделения');
+                // Snapshot for the highlight-only undo button — only when
+                // something is actually about to change visually (existing
+                // marks present OR a new highlight will be applied below).
+                if ((hasAnyMark || hadSelection) && typeof pushHighlightHistory === 'function') {
+                    pushHighlightHistory('Смена стиля выделения');
+                }
                 state.settings.highlightStyle = chip.dataset.style;
                 styleChipsContainer.querySelectorAll('.highlight-style-chip').forEach(c => c.classList.remove('active'));
                 chip.classList.add('active');
