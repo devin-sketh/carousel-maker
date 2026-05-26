@@ -1437,9 +1437,24 @@ function makeDraggable(el, opts = {}) {
             // push history for real drags (not stray clicks).
             moved: false,
             historyPushed: false,
+            // For smooth dragging we animate `transform: translate3d(...)`
+            // every frame (rAF-throttled) instead of re-writing top/left on
+            // each pointermove. left/top is committed once on pointerup.
+            // Saving the original transform lets us cleanly restore it.
+            origTransform: el.style.transform || '',
+            pendingDx: 0,
+            pendingDy: 0,
+            rafId: 0,
         };
         try { el.setPointerCapture(e.pointerId); } catch (_) {}
         el.classList.add('dragging');
+    };
+
+    const flushTransform = () => {
+        if (!drag) return;
+        drag.rafId = 0;
+        const base = drag.origTransform ? (drag.origTransform + ' ') : '';
+        el.style.transform = base + `translate3d(${drag.pendingDx}px, ${drag.pendingDy}px, 0)`;
     };
 
     const onMove = (e) => {
@@ -1453,27 +1468,30 @@ function makeDraggable(el, opts = {}) {
             drag.moved = true;
             if (typeof pushEditHistory === 'function') pushEditHistory('Перед перетаскиванием');
         }
-        const dxPct = dxPx / drag.cw * 100;
-        const dyPct = dyPx / drag.ch * 100;
-        const newLeft = drag.startLeftPct + dxPct;
-        const newTop = drag.startTopPct + dyPct;
-        el.style.left = newLeft + '%';
-        el.style.top = newTop + '%';
-        el.style.right = 'auto';
-        el.style.bottom = 'auto';
+        drag.pendingDx = dxPx;
+        drag.pendingDy = dyPx;
+        if (!drag.rafId) drag.rafId = requestAnimationFrame(flushTransform);
     };
 
     const onUp = (e) => {
         if (!drag) return;
+        if (drag.rafId) { cancelAnimationFrame(drag.rafId); drag.rafId = 0; }
         const dxPct = (e.clientX - drag.startX) / drag.cw * 100;
         const dyPct = (e.clientY - drag.startY) / drag.ch * 100;
+        const newLeftPct = drag.startLeftPct + dxPct;
+        const newTopPct = drag.startTopPct + dyPct;
+        // Commit the final position to top/left (in %) so it survives any
+        // future re-render, and restore the element's original transform so
+        // the translate3d we used during the drag doesn't compound.
+        el.style.transform = drag.origTransform;
+        el.style.left = newLeftPct + '%';
+        el.style.top = newTopPct + '%';
+        el.style.right = 'auto';
+        el.style.bottom = 'auto';
         // Drag only changes position. Don't pass width/height to onEnd so that
         // elements relying on aspect-ratio or width:auto stay intact. Resize
         // handles still pass full geometry.
-        const result = {
-            leftPct: drag.startLeftPct + dxPct,
-            topPct: drag.startTopPct + dyPct,
-        };
+        const result = { leftPct: newLeftPct, topPct: newTopPct };
         drag = null;
         el.classList.remove('dragging');
         try { el.releasePointerCapture(e.pointerId); } catch (_) {}
@@ -1497,6 +1515,7 @@ function unmakeDraggable(el) {
     el._dragHandlers = null;
     el.style.touchAction = '';
     el.style.userSelect = '';
+    el.classList.remove('dragging');
 }
 
 /* ===================== PINCH-TO-ZOOM TEXT =====================
@@ -2334,14 +2353,27 @@ function renderSlide() {
 
         if (titleIsActive) {
             makeDraggable(slideTitle, {
-                onEnd: (geom) => { slide.titlePos = geom; renderThumbnails(); },
+                // After the drag finishes, commit the new position in % to
+                // slide state AND visually reposition the element via
+                // applyElementPos so the user sees the final placement even
+                // when no full re-render is queued (e.g. on a second drag
+                // after the element is already selected).
+                onEnd: (geom) => {
+                    slide.titlePos = geom;
+                    applyElementPos(slideTitle, geom);
+                    renderThumbnails();
+                },
             });
         } else {
             unmakeDraggable(slideTitle);
         }
         if (bodyIsActive) {
             makeDraggable(slideBody, {
-                onEnd: (geom) => { slide.bodyPos = geom; renderThumbnails(); },
+                onEnd: (geom) => {
+                    slide.bodyPos = geom;
+                    applyElementPos(slideBody, geom);
+                    renderThumbnails();
+                },
             });
         } else {
             unmakeDraggable(slideBody);
@@ -2565,13 +2597,10 @@ function renderSlide() {
     // Sidebar decor-detail panel mirrors the selected decoration.
     if (typeof syncDecorDetailPanel === 'function') syncDecorDetailPanel();
 
-    // Sync edit panel
-    const editTitleInput = $('#edit-title-input');
-    const editBodyInput = $('#edit-body-input');
-    if (editTitleInput && editBodyInput) {
-        editTitleInput.value = slide.title || '';
-        editBodyInput.value = slide.body || '';
-    }
+    // Sync edit-panel mirrors. The mirrors show the slide title/body with
+    // highlight marks intact and are the user's bigger, calmer surface for
+    // selecting text → applying highlights.
+    if (typeof syncEditMirrors === 'function') syncEditMirrors();
 
     // Capture the just-rendered style + bg as this slide's persistent override
     // so that navigating away and back restores it. Runs every frame so any
@@ -3124,6 +3153,7 @@ function applyHighlight() {
     }
 
     renderThumbnails();
+    if (typeof syncEditMirrors === 'function') syncEditMirrors();
 }
 
 function clearHighlights() {
@@ -3932,6 +3962,349 @@ function showToast(msg) {
     setTimeout(() => toast.remove(), 3000);
 }
 
+/* ===================== TEXT ACTION POPOVER =====================
+ * Small floating plate that appears above the slide title/body when the
+ * user taps them. Offers three actions: edit (default contenteditable),
+ * select (highlight the word at click point), move (switch the canvas
+ * into move-mode with this text element selected). Designed not to steal
+ * focus from the contentEditable target. */
+let _popoverState = { targetKey: null, clickX: 0, clickY: 0 };
+
+function _popoverEl() { return document.getElementById('text-action-popover'); }
+
+function hideTextActionPopover() {
+    const pop = _popoverEl();
+    if (pop) pop.hidden = true;
+    _popoverState.targetKey = null;
+}
+
+function showTextActionPopover(targetKey, clientX, clientY, anchorEl) {
+    const pop = _popoverEl();
+    if (!pop) return;
+    _popoverState.targetKey = targetKey;
+    _popoverState.clickX = clientX;
+    _popoverState.clickY = clientY;
+    // Position above the click point, clamped inside the viewport. The
+    // popover uses `transform: translate(-50%, -100%)` so (left, top) is the
+    // anchor point at the bottom-center of the plate.
+    pop.hidden = false;
+    // Measure after a frame so width is known.
+    requestAnimationFrame(() => {
+        const r = pop.getBoundingClientRect();
+        const margin = 6;
+        let top = clientY - margin;
+        let left = clientX;
+        // If we'd render above the viewport, flip below the click point.
+        if (top - r.height < 4) {
+            top = clientY + margin + r.height;
+            pop.style.setProperty('--tap-flip', '1');
+        } else {
+            pop.style.removeProperty('--tap-flip');
+        }
+        // Clamp horizontally so the plate stays visible.
+        const half = r.width / 2;
+        const vw = window.innerWidth;
+        if (left - half < 4) left = half + 4;
+        if (left + half > vw - 4) left = vw - half - 4;
+        pop.style.top = top + 'px';
+        pop.style.left = left + 'px';
+    });
+}
+
+function _selectWordAtPoint(clientX, clientY, hostEl) {
+    // Build a Range at the caret position under (x, y) and expand to the
+    // word boundary on each side. Used by the "Выбрать" popover action.
+    let caret = null;
+    if (typeof document.caretRangeFromPoint === 'function') {
+        caret = document.caretRangeFromPoint(clientX, clientY);
+    } else if (typeof document.caretPositionFromPoint === 'function') {
+        const p = document.caretPositionFromPoint(clientX, clientY);
+        if (p) {
+            caret = document.createRange();
+            caret.setStart(p.offsetNode, p.offset);
+            caret.setEnd(p.offsetNode, p.offset);
+        }
+    }
+    if (!caret) return false;
+    const node = caret.startContainer;
+    if (!node || node.nodeType !== Node.TEXT_NODE) return false;
+    if (!hostEl.contains(node)) return false;
+    const txt = node.nodeValue || '';
+    let start = caret.startOffset;
+    let end = caret.startOffset;
+    const isWord = (ch) => /[\p{L}\p{N}_-]/u.test(ch);
+    while (start > 0 && isWord(txt[start - 1])) start--;
+    while (end < txt.length && isWord(txt[end])) end++;
+    if (start === end) return false;
+    const r = document.createRange();
+    r.setStart(node, start);
+    r.setEnd(node, end);
+    const sel = window.getSelection();
+    if (!sel) return false;
+    sel.removeAllRanges();
+    sel.addRange(r);
+    // captureEditorSelection() runs on 'selectionchange' but call it
+    // explicitly to avoid the popover-click race.
+    captureEditorSelection();
+    return true;
+}
+
+function setupTextActionPopover() {
+    const pop = _popoverEl();
+    if (!pop) return;
+    // Don't move focus when the user mousedowns a popover button — the
+    // contentEditable target must keep its selection so "Выбрать" survives
+    // and so the caret stays put for "Отредактировать".
+    pop.querySelectorAll('.tap-btn').forEach(btn => {
+        btn.addEventListener('mousedown', (ev) => ev.preventDefault());
+        btn.addEventListener('click', (ev) => {
+            ev.preventDefault();
+            ev.stopPropagation();
+            const action = btn.dataset.tapAction;
+            const target = _popoverState.targetKey;
+            const x = _popoverState.clickX;
+            const y = _popoverState.clickY;
+            const hostEl = target === 'title' ? slideTitle : slideBody;
+            handleTextAction(action, target, hostEl, x, y);
+            hideTextActionPopover();
+        });
+    });
+    // The popover swallows its own clicks so the global "click outside =>
+    // dismiss" handler below doesn't immediately close it.
+    pop.addEventListener('pointerdown', (ev) => ev.stopPropagation());
+
+    // Dismiss on any other interaction.
+    document.addEventListener('pointerdown', (ev) => {
+        if (pop.hidden) return;
+        if (pop.contains(ev.target)) return;
+        hideTextActionPopover();
+    }, true);
+    document.addEventListener('keydown', (ev) => {
+        if (pop.hidden) return;
+        if (ev.key === 'Escape') hideTextActionPopover();
+    });
+    window.addEventListener('scroll', hideTextActionPopover, true);
+    window.addEventListener('resize', hideTextActionPopover);
+}
+
+function handleTextAction(action, target, hostEl, clickX, clickY) {
+    if (!hostEl) return;
+    if (action === 'edit') {
+        // Make sure we're in edit mode and the element is contentEditable +
+        // focused. Place the caret at the click point so the user can start
+        // typing where they tapped.
+        if (state.settings && state.settings.moveMode) {
+            state.settings.moveMode = false;
+            const be = $('#btn-mode-edit');
+            const bm = $('#btn-mode-move');
+            if (be) be.classList.add('active');
+            if (bm) bm.classList.remove('active');
+            renderSlide();
+        }
+        hostEl.contentEditable = 'true';
+        hostEl.focus();
+        try {
+            const caret = (typeof document.caretRangeFromPoint === 'function')
+                ? document.caretRangeFromPoint(clickX, clickY)
+                : null;
+            if (caret) {
+                const sel = window.getSelection();
+                sel.removeAllRanges();
+                sel.addRange(caret);
+            }
+        } catch (_) {}
+    } else if (action === 'select') {
+        // Highlight the word under the click and capture as editorSelection so
+        // the user can apply a highlight from the sidebar without a second
+        // manual selection step.
+        if (state.settings && state.settings.moveMode) {
+            state.settings.moveMode = false;
+            renderSlide();
+        }
+        hostEl.contentEditable = 'true';
+        hostEl.focus();
+        const ok = _selectWordAtPoint(clickX, clickY, hostEl);
+        if (!ok) showToast('Не удалось выделить слово — попробуйте двойной клик');
+        else showToast('Слово выделено — нажмите «Применить» в панели «Выделение»');
+    } else if (action === 'move') {
+        // Switch to move-mode with this text element selected so it's the
+        // only thing draggable. Existing render logic gives it pointer-
+        // events:auto, the bright outline and the resize handles.
+        state.settings.moveMode = true;
+        state.selectedTextEl = target;
+        state.selectedDecorIdx = null;
+        const be = $('#btn-mode-edit');
+        const bm = $('#btn-mode-move');
+        if (be) be.classList.remove('active');
+        if (bm) bm.classList.add('active');
+        renderSlide();
+        showToast('Тяните блок мышью или пальцем');
+    }
+}
+
+/* ===================== EDIT-PANEL MIRROR =====================
+ * Two contenteditable divs at the bottom of the editor that mirror the
+ * currently selected slide's title and body — *with* their highlight marks
+ * intact. The user can:
+ *   - read the same text + highlights as on the slide, in a calm, scrollable
+ *     panel (no canvas scaling tricks).
+ *   - select a fragment here and click «Применить» in the sidebar's
+ *     "Выделение" section to highlight the same fragment on the slide.
+ *   - edit the text here; the slide updates live, highlights are cleared
+ *     (matches existing behaviour when inline editing the slide).
+ */
+const _mirrorRefs = { title: null, body: null };
+
+function _getMirror(target) {
+    if (target === 'title') return _mirrorRefs.title || (_mirrorRefs.title = document.getElementById('edit-title-mirror'));
+    if (target === 'body')  return _mirrorRefs.body  || (_mirrorRefs.body  = document.getElementById('edit-body-mirror'));
+    return null;
+}
+
+function _isInsideMirror(node) {
+    const mt = _getMirror('title');
+    const mb = _getMirror('body');
+    if (mt && mt.contains(node)) return 'title';
+    if (mb && mb.contains(node)) return 'body';
+    return null;
+}
+
+function syncEditMirrors() {
+    const slide = state.slides[state.currentSlide];
+    if (!slide) return;
+    const mt = _getMirror('title');
+    const mb = _getMirror('body');
+    // Don't blow away the caret while the user is actively typing in either
+    // mirror — the input handler keeps slide state in sync, and we'll
+    // re-render the mirror on the next blur/render that isn't sourced from
+    // the mirror itself.
+    if (mt && document.activeElement !== mt) {
+        const html = slide.titleHtml || escapeHtml(slide.title || '');
+        if (mt.innerHTML !== html) mt.innerHTML = html;
+    }
+    if (mb && document.activeElement !== mb) {
+        const html = slide.bodyHtml || escapeHtml(slide.body || '');
+        if (mb.innerHTML !== html) mb.innerHTML = html;
+    }
+}
+
+function _plainTextOffsets(rootEl, range) {
+    // Map a DOM Range inside rootEl to plain-text character offsets.
+    // Works regardless of how text is nested (text nodes, marks, spans).
+    try {
+        const pre = document.createRange();
+        pre.selectNodeContents(rootEl);
+        pre.setEnd(range.startContainer, range.startOffset);
+        const start = pre.toString().length;
+        const len = range.toString().length;
+        return { start, end: start + len };
+    } catch (e) {
+        return null;
+    }
+}
+
+function _rangeFromOffsets(rootEl, start, end) {
+    // Inverse of _plainTextOffsets: produce a Range inside rootEl that spans
+    // the same plain-text characters.
+    const walker = document.createTreeWalker(rootEl, NodeFilter.SHOW_TEXT, null);
+    let acc = 0;
+    let startNode = null, startOff = 0, endNode = null, endOff = 0;
+    let node;
+    while ((node = walker.nextNode())) {
+        const len = node.nodeValue.length;
+        if (!startNode && acc + len >= start) { startNode = node; startOff = start - acc; }
+        if (acc + len >= end) { endNode = node; endOff = end - acc; break; }
+        acc += len;
+    }
+    if (!startNode || !endNode) return null;
+    const r = document.createRange();
+    try {
+        r.setStart(startNode, startOff);
+        r.setEnd(endNode, endOff);
+        return r;
+    } catch (e) {
+        return null;
+    }
+}
+
+function _captureMirrorSelection() {
+    const sel = window.getSelection();
+    if (!sel || sel.rangeCount === 0) return false;
+    const r = sel.getRangeAt(0);
+    if (r.collapsed) return false;
+    const target = _isInsideMirror(r.commonAncestorContainer);
+    if (!target) return false;
+    // Map the mirror selection to a slide-DOM range so applyHighlight() can
+    // operate on the slide.
+    const mirror = _getMirror(target);
+    const slideEl = target === 'title' ? slideTitle : slideBody;
+    if (!mirror || !slideEl) return false;
+    const offsets = _plainTextOffsets(mirror, r);
+    if (!offsets || offsets.end <= offsets.start) return false;
+    const slideRange = _rangeFromOffsets(slideEl, offsets.start, offsets.end);
+    if (!slideRange) return false;
+    editorSelection.range = slideRange;
+    editorSelection.text = slideRange.toString().trim();
+    editorSelection.target = target;
+    editorSelection.slideIdx = state.currentSlide;
+    // Visual hint that the mirror is the "source of truth" for this selection.
+    document.querySelectorAll('.edit-mirror').forEach(m => m.classList.remove('has-active-selection'));
+    mirror.classList.add('has-active-selection');
+    updateSelectionPreviewBar();
+    return true;
+}
+
+function setupEditMirrors() {
+    const mt = _getMirror('title');
+    const mb = _getMirror('body');
+    [mt, mb].forEach(m => {
+        if (!m) return;
+        const target = m.dataset.target;
+        // Editing the mirror is wired the same way as the inline slide
+        // contentEditable: write back plain text to slide state and clear
+        // any highlight HTML (highlights would be invalid after a text edit).
+        m.addEventListener('input', () => {
+            const slide = state.slides[state.currentSlide];
+            if (!slide) return;
+            if (typeof pushEditHistoryDebounced === 'function') {
+                pushEditHistoryDebounced(target === 'title' ? 'До правки заголовка' : 'До правки текста', 700);
+            }
+            const txt = m.innerText;
+            if (target === 'title') {
+                slide.title = txt;
+                slide.titleHtml = null;
+                if (slideTitle) slideTitle.innerHTML = escapeHtml(txt);
+            } else {
+                slide.body = txt;
+                slide.bodyHtml = null;
+                if (slideBody) slideBody.innerHTML = escapeHtml(txt);
+            }
+            renderThumbnails();
+        });
+        // Tapping into a mirror clears the visual "active selection" badge on
+        // siblings so it doesn't lie about which field owns the selection.
+        m.addEventListener('focus', () => {
+            document.querySelectorAll('.edit-mirror').forEach(x => {
+                if (x !== m) x.classList.remove('has-active-selection');
+            });
+        });
+    });
+    // Whenever the user finishes a selection inside a mirror, propagate it
+    // to editorSelection so the sidebar's «Применить» button works on it.
+    document.addEventListener('selectionchange', () => {
+        const sel = window.getSelection();
+        if (!sel || sel.rangeCount === 0) return;
+        const r = sel.getRangeAt(0);
+        if (r.collapsed) return;
+        if (!_isInsideMirror(r.commonAncestorContainer)) {
+            // Selection lives outside a mirror — clear the mirror badge.
+            document.querySelectorAll('.edit-mirror').forEach(x => x.classList.remove('has-active-selection'));
+            return;
+        }
+        _captureMirrorSelection();
+    });
+}
+
 /* ===================== EVENT LISTENERS ===================== */
 function init() {
     renderLayouts();
@@ -3945,6 +4318,8 @@ function init() {
     setupPinchZoom();
     setupSwipeNavigation();
     setupMobileTabbar();
+    setupTextActionPopover();
+    setupEditMirrors();
 
     // Text input
     textInput.addEventListener('input', () => {
@@ -4266,33 +4641,10 @@ function init() {
         renderSlide();
     });
 
-    // Edit panel inputs
-    const editTitleInput = $('#edit-title-input');
-    const editBodyInput = $('#edit-body-input');
-    if (editTitleInput) {
-        editTitleInput.addEventListener('input', () => {
-            if (typeof pushEditHistoryDebounced === 'function') pushEditHistoryDebounced('До правки заголовка', 700);
-            const slide = state.slides[state.currentSlide];
-            if (!slide) return;
-            slide.title = editTitleInput.value;
-            slide.titleHtml = null;
-            slideTitle.innerHTML = escapeHtml(slide.title);
-            renderThumbnails();
-        });
-    }
-    if (editBodyInput) {
-        editBodyInput.addEventListener('input', () => {
-            if (typeof pushEditHistoryDebounced === 'function') pushEditHistoryDebounced('До правки текста', 700);
-            const slide = state.slides[state.currentSlide];
-            if (!slide) return;
-            slide.body = editBodyInput.value;
-            slide.bodyHtml = null;
-            slideBody.innerHTML = escapeHtml(slide.body);
-            renderThumbnails();
-        });
-    }
+    // Edit-panel mirrors (input handlers wired in setupEditMirrors()).
 
-    // Sync inline edits back to edit panel
+    // Sync inline edits back to the mirror panels so they always reflect the
+    // current slide content + highlights.
     slideTitle.addEventListener('input', () => {
         if (typeof pushEditHistoryDebounced === 'function') pushEditHistoryDebounced('До правки заголовка', 700);
         const slide = state.slides[state.currentSlide];
@@ -4300,7 +4652,7 @@ function init() {
         slide.title = slideTitle.innerText;
         if (slideTitle.querySelector('mark')) slide.titleHtml = slideTitle.innerHTML;
         else slide.titleHtml = null;
-        if (editTitleInput) editTitleInput.value = slide.title;
+        if (typeof syncEditMirrors === 'function') syncEditMirrors();
         renderThumbnails();
     });
     slideBody.addEventListener('input', () => {
@@ -4310,9 +4662,32 @@ function init() {
         slide.body = slideBody.innerText;
         if (slideBody.querySelector('mark')) slide.bodyHtml = slideBody.innerHTML;
         else slide.bodyHtml = null;
-        if (editBodyInput) editBodyInput.value = slide.body;
+        if (typeof syncEditMirrors === 'function') syncEditMirrors();
         renderThumbnails();
     });
+
+    // Tap-to-action popover for slide title/body. We only show it in edit
+    // mode (in move-mode the existing click logic selects the element for
+    // dragging and we don't want a competing UI).
+    const _maybeShowPopoverFor = (key, hostEl, ev) => {
+        if (!hostEl) return;
+        if (state.settings && state.settings.moveMode) return;
+        // Skip showing the plate when the user is actively dragging a
+        // selection (mouseup with a non-collapsed selection) — that's a
+        // standard text-selection gesture, not a request for the menu.
+        const sel = window.getSelection();
+        if (sel && sel.rangeCount && !sel.getRangeAt(0).collapsed) {
+            const r = sel.getRangeAt(0);
+            if (hostEl.contains(r.commonAncestorContainer)) return;
+        }
+        showTextActionPopover(key, ev.clientX, ev.clientY, hostEl);
+    };
+    slideTitle.addEventListener('click', (ev) => _maybeShowPopoverFor('title', slideTitle, ev));
+    slideBody.addEventListener('click', (ev) => _maybeShowPopoverFor('body', slideBody, ev));
+    // Hide the popover once the user starts typing — the menu has done its
+    // job and the keypress signals a clear "edit" intent.
+    slideTitle.addEventListener('keydown', hideTextActionPopover);
+    slideBody.addEventListener('keydown', hideTextActionPopover);
 
     // Color pickers
     const titleColorPicker = $('#title-color-picker');
