@@ -631,6 +631,28 @@ body {
 }
 .btn-reset-colors:hover { border-color: var(--primary); color: var(--primary); }
 
+/* Row containing the two highlight-section action buttons:
+   per-step undo on the left, "clear all" on the right. */
+.highlight-actions-row {
+    display: flex; gap: 6px; margin-top: 6px;
+}
+.highlight-actions-row .btn-reset-colors { flex: 1; }
+.btn-undo-highlight {
+    display: inline-flex; align-items: center; gap: 5px;
+    padding: 5px 10px; border: 1px solid var(--border);
+    border-radius: var(--radius-sm); background: var(--bg);
+    font-size: 0.75rem; font-weight: 500; cursor: pointer;
+    color: var(--text-secondary); transition: all var(--transition);
+    font-family: 'Inter', sans-serif;
+    flex: 1; justify-content: center;
+}
+.btn-undo-highlight:hover:not(:disabled) {
+    border-color: var(--primary); color: var(--primary);
+}
+.btn-undo-highlight:disabled {
+    opacity: 0.4; cursor: not-allowed;
+}
+
 /* Per-slide banner — explains scope of style changes + offers a one-tap
  * broadcast button to copy the current slide's style onto every other slide. */
 .per-slide-banner {
