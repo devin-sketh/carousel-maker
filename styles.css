@@ -1041,6 +1041,83 @@ body {
 }
 .edit-textarea:focus { border-color: var(--primary); outline: none; }
 
+/* Edit-panel mirror: contenteditable div that mirrors the slide title/body
+   *with* highlight marks. Lets the user select text in the panel and apply
+   highlights from there as if selecting on the slide. */
+.edit-mirror {
+    padding: 10px 12px; border: 1px solid var(--border);
+    border-radius: var(--radius-sm); font-size: 0.9rem;
+    font-family: 'Inter', sans-serif; background: var(--surface);
+    transition: border-color var(--transition), box-shadow var(--transition);
+    min-height: 36px; line-height: 1.5;
+    white-space: pre-wrap; word-break: break-word;
+    cursor: text;
+}
+.edit-mirror-body { min-height: 72px; }
+.edit-mirror:focus { border-color: var(--primary); outline: none; box-shadow: 0 0 0 2px rgba(99,102,241,0.12); }
+.edit-mirror:empty:before {
+    content: attr(data-placeholder);
+    color: var(--text-secondary);
+    opacity: 0.55;
+    pointer-events: none;
+}
+.edit-mirror.has-active-selection {
+    border-color: var(--primary);
+    box-shadow: 0 0 0 2px rgba(99,102,241,0.18);
+}
+.edit-mirror mark { background-color: transparent; }
+.edit-mirror-hint {
+    font-size: 0.65rem; font-weight: 500; color: var(--text-secondary);
+    text-transform: none; letter-spacing: 0; opacity: 0.7;
+    margin-left: 6px;
+}
+
+/* Floating action plate that appears on click over slide title/body.
+   Position is set via JS (position:fixed, top/left). */
+.text-action-popover {
+    position: fixed;
+    z-index: 1500;
+    display: flex; flex-direction: row; gap: 4px;
+    padding: 4px;
+    background: #ffffff;
+    border: 1px solid var(--border, #e5e7eb);
+    border-radius: 10px;
+    box-shadow: 0 8px 24px rgba(15, 23, 42, 0.14), 0 2px 6px rgba(15, 23, 42, 0.08);
+    font-family: 'Inter', sans-serif;
+    transform: translate(-50%, -100%);
+    animation: tap-pop-in 120ms ease-out;
+    pointer-events: auto;
+}
+.text-action-popover[hidden] { display: none; }
+.text-action-popover .tap-btn {
+    display: inline-flex; align-items: center; gap: 5px;
+    padding: 7px 10px;
+    background: transparent;
+    border: none;
+    border-radius: 7px;
+    font-size: 0.78rem; font-weight: 600; color: #1f2937;
+    cursor: pointer;
+    white-space: nowrap;
+    transition: background-color 120ms ease, color 120ms ease;
+}
+.text-action-popover .tap-btn:hover { background: #f3f4f6; color: var(--primary, #6366f1); }
+.text-action-popover .tap-btn:active { background: #e5e7eb; }
+.text-action-popover .tap-btn svg { flex-shrink: 0; }
+@keyframes tap-pop-in {
+    from { opacity: 0; transform: translate(-50%, calc(-100% + 4px)); }
+    to   { opacity: 1; transform: translate(-50%, -100%); }
+}
+
+/* Slide title/body get a transform-friendly base while dragging so we can
+   animate movement on the GPU without re-laying out the document. */
+.slide-title.dragging,
+.slide-body.dragging,
+.ai-decoration.dragging,
+.slide-content-area.dragging {
+    will-change: transform;
+    transition: none !important;
+}
+
 /* Thumbnails */
 .thumbnails-strip {
     display: flex; gap: 10px; padding: 16px 0 4px;
